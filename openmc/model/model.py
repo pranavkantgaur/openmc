@@ -33,6 +33,193 @@ class ModelModifier(Protocol):
         ...
 
 
+# Bayesian Optimization Support Classes
+class GaussianProcess:
+    """Simple Gaussian Process for Bayesian optimization with derivative support.
+    
+    This GP uses a squared exponential (RBF) kernel and supports incorporating
+    derivative observations from derivative tallies.
+    """
+    
+    def __init__(self, length_scale: float = 1.0, signal_variance: float = 1.0,
+                 noise_variance: float = 1e-6):
+        """Initialize Gaussian Process.
+        
+        Parameters
+        ----------
+        length_scale : float
+            Length scale parameter for RBF kernel
+        signal_variance : float
+            Signal variance (amplitude) for RBF kernel
+        noise_variance : float
+            Observation noise variance
+        """
+        self.length_scale = length_scale
+        self.signal_variance = signal_variance
+        self.noise_variance = noise_variance
+        self.X_train = None
+        self.y_train = None
+        self.y_std = None
+        self.dy_train = None  # Derivative observations
+        self.dy_std = None    # Derivative uncertainties
+        
+    def kernel(self, X1: np.ndarray, X2: np.ndarray) -> np.ndarray:
+        """Squared exponential (RBF) kernel.
+        
+        K(x, x') = sigma^2 * exp(-0.5 * ||x - x'||^2 / l^2)
+        """
+        sqdist = np.sum(X1**2, 1).reshape(-1, 1) + np.sum(X2**2, 1) - 2 * np.dot(X1, X2.T)
+        return self.signal_variance * np.exp(-0.5 * sqdist / self.length_scale**2)
+    
+    def kernel_derivative(self, X1: np.ndarray, X2: np.ndarray) -> np.ndarray:
+        """Derivative of kernel with respect to first argument.
+        
+        dK/dx1 = -sigma^2 / l^2 * (x1 - x2) * exp(-0.5 * ||x1 - x2||^2 / l^2)
+        """
+        diff = X1.reshape(-1, 1, 1) - X2.reshape(1, -1, 1)
+        sqdist = np.sum(diff**2, axis=2)
+        K = self.signal_variance * np.exp(-0.5 * sqdist / self.length_scale**2)
+        return -K / self.length_scale**2 * diff.squeeze()
+    
+    def fit(self, X: np.ndarray, y: np.ndarray, y_std: np.ndarray | None = None,
+            dy: np.ndarray | None = None, dy_std: np.ndarray | None = None):
+        """Fit GP to observations (with optional derivative observations).
+        
+        Parameters
+        ----------
+        X : np.ndarray
+            Training inputs (n_samples, n_features)
+        y : np.ndarray
+            Training outputs (n_samples,)
+        y_std : np.ndarray, optional
+            Standard deviations of outputs (for heteroscedastic noise)
+        dy : np.ndarray, optional
+            Derivative observations (n_samples,) - dy/dx at each X
+        dy_std : np.ndarray, optional
+            Uncertainties in derivative observations
+        """
+        self.X_train = X.reshape(-1, 1) if X.ndim == 1 else X
+        self.y_train = y
+        self.y_std = y_std if y_std is not None else np.full_like(y, np.sqrt(self.noise_variance))
+        self.dy_train = dy
+        self.dy_std = dy_std
+        
+        # Build augmented covariance matrix if derivatives are provided
+        n = len(X)
+        if dy is not None and np.any(dy != 0):
+            # Augmented system: [y, dy/dx]
+            # K_aug = [[K(X,X), dK/dx2(X,X)], [dK/dx1(X,X), d²K/dx1dx2(X,X)]]
+            K_yy = self.kernel(self.X_train, self.X_train)
+            K_dy = self.kernel_derivative(self.X_train, self.X_train)
+            
+            # Add noise to diagonal
+            noise_y = np.diag(self.y_std**2 + self.noise_variance)
+            noise_dy = np.diag(self.dy_std**2 + self.noise_variance) if dy_std is not None else np.eye(n) * self.noise_variance
+            
+            # Build block matrix
+            self.K = np.block([
+                [K_yy + noise_y, K_dy.T],
+                [K_dy, -self.kernel(self.X_train, self.X_train) / self.length_scale**2 + noise_dy]
+            ])
+            
+            # Augmented observations
+            self.y_aug = np.hstack([self.y_train, self.dy_train])
+        else:
+            # Standard GP without derivatives
+            K = self.kernel(self.X_train, self.X_train)
+            noise = np.diag(self.y_std**2 + self.noise_variance)
+            self.K = K + noise
+            self.y_aug = self.y_train
+        
+        # Precompute Cholesky decomposition for efficiency
+        try:
+            self.L = np.linalg.cholesky(self.K)
+            self.alpha = np.linalg.solve(self.L.T, np.linalg.solve(self.L, self.y_aug))
+        except np.linalg.LinAlgError:
+            # If Cholesky fails, add jitter and retry
+            self.K += np.eye(len(self.K)) * 1e-6
+            self.L = np.linalg.cholesky(self.K)
+            self.alpha = np.linalg.solve(self.L.T, np.linalg.solve(self.L, self.y_aug))
+    
+    def predict(self, X_test: np.ndarray, return_std: bool = True) -> tuple[np.ndarray, np.ndarray]:
+        """Predict mean and variance at test points.
+        
+        Parameters
+        ----------
+        X_test : np.ndarray
+            Test inputs
+        return_std : bool
+            Whether to return standard deviation
+            
+        Returns
+        -------
+        mean : np.ndarray
+            Predicted mean
+        std : np.ndarray
+            Predicted standard deviation (if return_std=True)
+        """
+        X_test = X_test.reshape(-1, 1) if X_test.ndim == 1 else X_test
+        
+        # Build cross-covariance
+        if self.dy_train is not None and np.any(self.dy_train != 0):
+            # Augmented cross-covariance
+            K_s = self.kernel(X_test, self.X_train)
+            K_ds = self.kernel_derivative(X_test, self.X_train)
+            K_cross = np.hstack([K_s, K_ds])
+        else:
+            K_cross = self.kernel(X_test, self.X_train)
+        
+        # Predictive mean
+        mean = K_cross.dot(self.alpha)
+        
+        if not return_std:
+            return mean, None
+        
+        # Predictive variance
+        v = np.linalg.solve(self.L, K_cross.T)
+        K_ss = self.kernel(X_test, X_test)
+        var = np.diag(K_ss) - np.sum(v**2, axis=0)
+        var = np.maximum(var, 0)  # Numerical stability
+        std = np.sqrt(var)
+        
+        return mean, std
+
+
+def expected_improvement(X: np.ndarray, gp: GaussianProcess, y_best: float,
+                        xi: float = 0.01) -> np.ndarray:
+    """Expected Improvement acquisition function.
+    
+    EI(x) = E[max(y_best - y(x), 0)] where y ~ GP
+    
+    Parameters
+    ----------
+    X : np.ndarray
+        Candidate points to evaluate
+    gp : GaussianProcess
+        Fitted GP model
+    y_best : float
+        Best observed value so far (minimization: lowest y)
+    xi : float
+        Exploration parameter (default 0.01)
+        
+    Returns
+    -------
+    ei : np.ndarray
+        Expected improvement at each point in X
+    """
+    from scipy.stats import norm
+    
+    mean, std = gp.predict(X, return_std=True)
+    std = std + 1e-9  # Avoid division by zero
+    
+    # For minimization: improvement when mean < y_best
+    z = (y_best - mean - xi) / std
+    ei = (y_best - mean - xi) * norm.cdf(z) + std * norm.pdf(z)
+    ei[std == 0] = 0.0
+    
+    return ei
+
+
 class Model:
     """Model container.
 
@@ -2665,6 +2852,11 @@ class Model:
             - 'gradient_descent': Traditional gradient descent using derivatives.
               Updates parameter using: x_new = x_old - learning_rate * error * dk/dx.
               Requires careful tuning of learning_rate parameter.
+            - 'bayesian_optimization': Bayesian optimization using Gaussian Process
+              surrogate model with derivative information. Uses Expected Improvement
+              acquisition function to select next evaluation point. Automatically
+              adapts kernel hyperparameters based on observed data. Most sample-efficient
+              method, especially with noisy derivative tallies.
             
             Ignored if use_derivative_tallies=False.
         learning_rate : float, optional
@@ -2729,10 +2921,10 @@ class Model:
                     f"Unsupported deriv_variable='{deriv_variable}'. "
                     "OpenMC C++ backend only supports: 'density', 'nuclide_density', 'temperature'"
                 )
-            if deriv_method not in ('least_squares', 'gradient_descent'):
+            if deriv_method not in ('least_squares', 'gradient_descent', 'bayesian_optimization'):
                 raise ValueError(
                     f"Invalid deriv_method='{deriv_method}'. "
-                    "Must be 'least_squares' or 'gradient_descent'"
+                    "Must be 'least_squares', 'gradient_descent', or 'bayesian_optimization'"
                 )
             if deriv_method == 'gradient_descent' and learning_rate <= 0:
                 raise ValueError(
@@ -2818,8 +3010,92 @@ class Model:
             for _ in range(maxiter - 2):
                 # ------ Step 1: propose next x
                 
+                # Check if using Bayesian optimization method
+                if use_derivative_tallies and deriv_method == 'bayesian_optimization':
+                    # BAYESIAN OPTIMIZATION METHOD
+                    # Use Gaussian Process with derivative information to model f(x)
+                    # Select next point using Expected Improvement acquisition function
+                    
+                    # Prepare data for GP (use all history, not just memory window)
+                    X_train = np.array(xs)
+                    y_train = np.array(fs)
+                    y_std_train = np.array(ss)
+                    
+                    # Include derivatives if available
+                    dy_train = np.array(dks) if any(dks) else None
+                    dy_std_train = np.array(dks_std) if any(dks_std) else None
+                    
+                    # Adaptive length scale based on range of observed x values
+                    x_range = max(xs) - min(xs) if len(xs) > 1 else 1.0
+                    length_scale = max(x_range / 3.0, 0.1)
+                    
+                    # Estimate signal variance from observed function values
+                    signal_var = np.var(fs) if len(fs) > 1 else 1.0
+                    signal_var = max(signal_var, 0.01)
+                    
+                    # Create and fit GP
+                    gp = GaussianProcess(
+                        length_scale=length_scale,
+                        signal_variance=signal_var,
+                        noise_variance=np.mean(ss)**2 if len(ss) > 0 else 1e-6
+                    )
+                    
+                    try:
+                        # Fit GP with or without derivatives
+                        if dy_train is not None and np.any(dy_train != 0):
+                            gp.fit(X_train, y_train, y_std_train, dy_train, dy_std_train)
+                            if output:
+                                print(f'  [BAYES-OPT] GP fitted with {len(X_train)} points and {np.sum(dy_train != 0)} derivatives')
+                        else:
+                            gp.fit(X_train, y_train, y_std_train)
+                            if output:
+                                print(f'  [BAYES-OPT] GP fitted with {len(X_train)} points (no derivatives)')
+                        
+                        # Find best observed value (for EI)
+                        y_best = min(np.abs(fs))  # Best (closest to zero)
+                        
+                        # Define search bounds
+                        if x_min is not None and x_max is not None:
+                            bounds_lower = x_min
+                            bounds_upper = x_max
+                        else:
+                            # Expand beyond observed range
+                            x_min_obs = min(xs)
+                            x_max_obs = max(xs)
+                            margin = (x_max_obs - x_min_obs) * 0.5
+                            bounds_lower = x_min_obs - margin if x_min is None else x_min
+                            bounds_upper = x_max_obs + margin if x_max is None else x_max
+                        
+                        # Grid search for maximum EI
+                        n_grid = 100
+                        X_candidates = np.linspace(bounds_lower, bounds_upper, n_grid).reshape(-1, 1)
+                        
+                        # Compute EI
+                        ei_values = expected_improvement(X_candidates, gp, y_best, xi=0.01)
+                        
+                        # Select point with maximum EI
+                        best_idx = np.argmax(ei_values)
+                        x_new = float(X_candidates[best_idx, 0])
+                        
+                        # Also get GP prediction at this point for diagnostics
+                        mean_new, std_new = gp.predict(np.array([[x_new]]), return_std=True)
+                        
+                        if output:
+                            print(f'  [BAYES-OPT] Selected x={x_new:.6g} (EI={ei_values[best_idx]:.6e})')
+                            print(f'  [BAYES-OPT] GP prediction: f={mean_new[0]:.6e} ± {std_new[0]:.6e}')
+                            print(f'  [BAYES-OPT] Best observed |f|={y_best:.6e}')
+                    
+                    except Exception as e:
+                        # Fallback to simple midpoint if GP fails
+                        if output:
+                            print(f'  [BAYES-OPT] GP fitting failed: {e}')
+                            print(f'  [BAYES-OPT] Falling back to midpoint strategy')
+                        
+                        # Use midpoint of last two evaluations
+                        x_new = float((xs[-1] + xs[-2]) / 2) if len(xs) >= 2 else float(xs[-1] + 0.1)
+                
                 # Check if using gradient descent method
-                if use_derivative_tallies and deriv_method == 'gradient_descent' and dks[-1] != 0.0:
+                elif use_derivative_tallies and deriv_method == 'gradient_descent' and dks[-1] != 0.0:
                     # GRADIENT DESCENT METHOD WITH NORMALIZATION
                     # Incorporates k_eff uncertainty; normalizes gradient by its magnitude.
                     # Update: step = -lr * error * (dk/dx / grad_scale) * adaptive

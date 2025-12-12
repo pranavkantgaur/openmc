@@ -289,18 +289,18 @@ def run_test(test_name, model_builder, modifier_func, deriv_variable, deriv_mate
 
 
 if __name__ == '__main__':
-    print("\n" + "=" * 80)
-    print("COMPREHENSIVE COMPARISON: GRsecant vs Least Squares vs Gradient Descent")
-    print("=" * 80)
-    print("This test compares three optimization methods on two test cases:")
-    print("  Test Case 1: Boron concentration search (nuclide_density with ppm conversion)")
-    print("  Test Case 2: Fuel density search (density derivative, densification scenario)")
+    print("\n" + "=" * 100)
+    print("COMPREHENSIVE COMPARISON: GRsecant vs Least Squares vs Gradient Descent vs Bayesian Optimization")
+    print("=" * 100)
+    print("This test compares four optimization methods on the fuel density search test case:")
+    print("  Test Case: Fuel density search (density derivative, densification scenario)")
     print("")
     print("Methods:")
-    print("  1. GRsecant (baseline):      No derivatives, standard curve-fitting")
-    print("  2. Least Squares:            GRsecant + gradient constraints + auto-normalization")
-    print("  3. Gradient Descent (GD):    Direct sensitivity-based updates (lr=1e-17, normalized)")
-    print("=" * 80)
+    print("  1. GRsecant (baseline):         No derivatives, standard curve-fitting")
+    print("  2. Least Squares:               GRsecant + gradient constraints + auto-normalization")
+    print("  3. Gradient Descent (GD):       Direct sensitivity-based updates (lr tunable)")
+    print("  4. Bayesian Optimization (BO):  Gaussian Process surrogate + Expected Improvement")
+    print("=" * 100)
     '''
     # Physical constants for boron ppm conversion
     BORON_DENSITY_WATER = 0.741  # g/cm³ at room temperature
@@ -460,6 +460,22 @@ if __name__ == '__main__':
         )
         if result:
             density_results['Gradient Descent (with deriv)'] = result
+        
+        # Method 4: Bayesian Optimization with derivative tallies
+        result = run_test(
+            "Fuel density search: Bayesian Optimization WITH derivatives",
+            lambda: build_model(boron_ppm=150),
+            modifier_fuel_density,
+            'density', 1, None,  # Material ID 1 is fuel
+            5.0, 11.0, 1.17,
+            use_derivative_tallies=True,
+            deriv_method='bayesian_optimization',
+            use_deriv_uncertainty=True,
+            use_deriv_constraints=True,
+            x_min=2.0, x_max=12.0
+        )
+        if result:
+            density_results['Bayesian Optimization (with deriv)'] = result
             
     except Exception as e:
         print(f"  ⚠ Fuel density test encountered error: {e}")
@@ -542,17 +558,17 @@ if __name__ == '__main__':
     '''
     # TABLE 2: Fuel Density Search
     if density_results:
-        print("\n" + "=" * 100)
+        print("\n" + "=" * 110)
         print("[TABLE 2] FUEL DENSITY SEARCH RESULTS")
-        print("-" * 100)
-        print(f"{'Method':<30} {'Final Density (g/cm³)':<18} {'MC Runs':<12} {'Tot Batches':<14} {'Time (s)':<12} {'Converged':<10}")
-        print("-" * 100)
+        print("-" * 110)
+        print(f"{'Method':<40} {'Final Density (g/cm³)':<22} {'MC Runs':<12} {'Tot Batches':<14} {'Time (s)':<12} {'Converged':<10}")
+        print("-" * 110)
         
-        for method_name in ['GRsecant (no deriv)', 'Least Squares (with deriv)', 'Gradient Descent (with deriv)']:
+        for method_name in ['GRsecant (no deriv)', 'Least Squares (with deriv)', 'Gradient Descent (with deriv)', 'Bayesian Optimization (with deriv)']:
             if method_name in density_results:
                 result = density_results[method_name]
                 elapsed = getattr(result, 'elapsed_time', 0)
-                print(f"{method_name:<30} {result.root:>16.3f} {result.function_calls:>11d} {result.total_batches:>13d} {elapsed:>11.2f} {str(result.converged):>9}")
+                print(f"{method_name:<40} {result.root:>16.3f} {result.function_calls:>11d} {result.total_batches:>13d} {elapsed:>11.2f} {str(result.converged):>9}")
         
         # Efficiency analysis for density
         if 'GRsecant (no deriv)' in density_results:
@@ -565,7 +581,7 @@ if __name__ == '__main__':
             print("Efficiency Gains (relative to GRsecant baseline):")
             print("-" * 100)
             
-            for method_name in ['Least Squares (with deriv)', 'Gradient Descent (with deriv)']:
+            for method_name in ['Least Squares (with deriv)', 'Gradient Descent (with deriv)', 'Bayesian Optimization (with deriv)']:
                 if method_name in density_results:
                     result = density_results[method_name]
                     run_pct = ((baseline_runs - result.function_calls) / baseline_runs * 100) if baseline_runs > 0 else 0
