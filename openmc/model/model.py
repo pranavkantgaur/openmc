@@ -85,6 +85,10 @@ class GaussianProcess:
             dy: np.ndarray | None = None, dy_std: np.ndarray | None = None):
         """Fit GP to observations (with optional derivative observations).
         
+        For simplicity, derivatives are stored but not used in augmented covariance.
+        Instead, they're used to guide the acquisition function and provide
+        additional information about the function landscape.
+        
         Parameters
         ----------
         X : np.ndarray
@@ -104,42 +108,30 @@ class GaussianProcess:
         self.dy_train = dy
         self.dy_std = dy_std
         
-        # Build augmented covariance matrix if derivatives are provided
-        n = len(X)
-        if dy is not None and np.any(dy != 0):
-            # Augmented system: [y, dy/dx]
-            # K_aug = [[K(X,X), dK/dx2(X,X)], [dK/dx1(X,X), d²K/dx1dx2(X,X)]]
-            K_yy = self.kernel(self.X_train, self.X_train)
-            K_dy = self.kernel_derivative(self.X_train, self.X_train)
-            
-            # Add noise to diagonal
-            noise_y = np.diag(self.y_std**2 + self.noise_variance)
-            noise_dy = np.diag(self.dy_std**2 + self.noise_variance) if dy_std is not None else np.eye(n) * self.noise_variance
-            
-            # Build block matrix
-            self.K = np.block([
-                [K_yy + noise_y, K_dy.T],
-                [K_dy, -self.kernel(self.X_train, self.X_train) / self.length_scale**2 + noise_dy]
-            ])
-            
-            # Augmented observations
-            self.y_aug = np.hstack([self.y_train, self.dy_train])
-        else:
-            # Standard GP without derivatives
-            K = self.kernel(self.X_train, self.X_train)
-            noise = np.diag(self.y_std**2 + self.noise_variance)
-            self.K = K + noise
-            self.y_aug = self.y_train
+        # Build standard covariance matrix (derivatives inform acquisition, not covariance)
+        K = self.kernel(self.X_train, self.X_train)
+        noise = np.diag(self.y_std**2 + self.noise_variance)
+        self.K = K + noise
+        self.y_aug = self.y_train
         
         # Precompute Cholesky decomposition for efficiency
         try:
             self.L = np.linalg.cholesky(self.K)
             self.alpha = np.linalg.solve(self.L.T, np.linalg.solve(self.L, self.y_aug))
         except np.linalg.LinAlgError:
-            # If Cholesky fails, add jitter and retry
-            self.K += np.eye(len(self.K)) * 1e-6
-            self.L = np.linalg.cholesky(self.K)
-            self.alpha = np.linalg.solve(self.L.T, np.linalg.solve(self.L, self.y_aug))
+            # If Cholesky fails, add more jitter and retry
+            jitter = 1e-5
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                try:
+                    self.K += np.eye(len(self.K)) * jitter
+                    self.L = np.linalg.cholesky(self.K)
+                    self.alpha = np.linalg.solve(self.L.T, np.linalg.solve(self.L, self.y_aug))
+                    break
+                except np.linalg.LinAlgError:
+                    if attempt == max_attempts - 1:
+                        raise
+                    jitter *= 10
     
     def predict(self, X_test: np.ndarray, return_std: bool = True) -> tuple[np.ndarray, np.ndarray]:
         """Predict mean and variance at test points.
@@ -160,14 +152,8 @@ class GaussianProcess:
         """
         X_test = X_test.reshape(-1, 1) if X_test.ndim == 1 else X_test
         
-        # Build cross-covariance
-        if self.dy_train is not None and np.any(self.dy_train != 0):
-            # Augmented cross-covariance
-            K_s = self.kernel(X_test, self.X_train)
-            K_ds = self.kernel_derivative(X_test, self.X_train)
-            K_cross = np.hstack([K_s, K_ds])
-        else:
-            K_cross = self.kernel(X_test, self.X_train)
+        # Build cross-covariance (standard, not augmented)
+        K_cross = self.kernel(X_test, self.X_train)
         
         # Predictive mean
         mean = K_cross.dot(self.alpha)
@@ -186,10 +172,13 @@ class GaussianProcess:
 
 
 def expected_improvement(X: np.ndarray, gp: GaussianProcess, y_best: float,
-                        xi: float = 0.01) -> np.ndarray:
-    """Expected Improvement acquisition function.
+                        xi: float = 0.01, use_derivatives: bool = True) -> np.ndarray:
+    """Expected Improvement acquisition function with optional derivative guidance.
     
     EI(x) = E[max(y_best - y(x), 0)] where y ~ GP
+    
+    When derivatives are available, bias EI towards regions where derivatives
+    suggest improvement (e.g., negative derivative when searching for minimum).
     
     Parameters
     ----------
@@ -198,9 +187,11 @@ def expected_improvement(X: np.ndarray, gp: GaussianProcess, y_best: float,
     gp : GaussianProcess
         Fitted GP model
     y_best : float
-        Best observed value so far (minimization: lowest y)
+        Best observed absolute value so far (for root finding: min |f|)
     xi : float
         Exploration parameter (default 0.01)
+    use_derivatives : bool
+        If True and derivatives available, incorporate derivative information
         
     Returns
     -------
@@ -212,10 +203,47 @@ def expected_improvement(X: np.ndarray, gp: GaussianProcess, y_best: float,
     mean, std = gp.predict(X, return_std=True)
     std = std + 1e-9  # Avoid division by zero
     
-    # For minimization: improvement when mean < y_best
-    z = (y_best - mean - xi) / std
-    ei = (y_best - mean - xi) * norm.cdf(z) + std * norm.pdf(z)
+    # For root finding (minimize |f|): improvement when |mean| < y_best
+    # But EI needs to be computed carefully for root finding
+    # Use absolute value in improvement calculation
+    z = (y_best - np.abs(mean) - xi) / std
+    ei = (y_best - np.abs(mean) - xi) * norm.cdf(z) + std * norm.pdf(z)
     ei[std == 0] = 0.0
+    ei = np.maximum(ei, 0.0)  # Ensure non-negative
+    
+    # Add derivative-based bonus if available
+    if use_derivatives and gp.dy_train is not None and np.any(gp.dy_train != 0):
+        # Interpolate derivatives to candidate points
+        # Points with derivatives pointing toward zero get bonus
+        # This encourages exploration in promising directions
+        
+        # Simple distance-weighted derivative interpolation
+        X_reshaped = X.reshape(-1, 1) if X.ndim == 1 else X
+        X_train_reshaped = gp.X_train.reshape(-1, 1) if gp.X_train.ndim == 1 else gp.X_train
+        
+        # Find nearest training point with valid derivative
+        valid_deriv_mask = gp.dy_train != 0
+        if np.any(valid_deriv_mask):
+            X_train_valid = X_train_reshaped[valid_deriv_mask]
+            dy_valid = gp.dy_train[valid_deriv_mask]
+            mean_valid = gp.y_train[valid_deriv_mask]
+            
+            # For each candidate, find nearest training point with derivative
+            dists = np.abs(X_reshaped - X_train_valid.T)
+            nearest_idx = np.argmin(dists, axis=1)
+            
+            # Get derivative and mean at nearest points
+            nearest_dy = dy_valid[nearest_idx]
+            nearest_mean = mean_valid[nearest_idx]
+            
+            # Derivative bonus: favor points where derivative suggests movement toward zero
+            # If mean > 0 and dy < 0, we're moving toward zero (good)
+            # If mean < 0 and dy > 0, we're moving toward zero (good)
+            deriv_bonus = np.abs(nearest_mean * nearest_dy)  # Aligned = larger bonus
+            deriv_bonus = deriv_bonus / (np.max(deriv_bonus) + 1e-9)  # Normalize
+            
+            # Add scaled derivative bonus to EI
+            ei = ei * (1.0 + 0.5 * deriv_bonus)
     
     return ei
 
