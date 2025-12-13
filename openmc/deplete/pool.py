@@ -12,8 +12,9 @@ import numpy as np
 from openmc.mpi import comm, MPI
 
 # Set up multiprocessing context to be compatible with MPI
-# When mpi4py is available, use 'spawn' instead of 'fork' to avoid issues
-# with MPI when forking processes
+# When mpi4py is available (MPI is not a Mock object), use 'spawn' instead of
+# 'fork' to avoid issues with MPI when forking processes. The Mock object is
+# used as a placeholder when mpi4py fails to import (see openmc/mpi.py).
 if not isinstance(MPI, Mock):
     _mp_context = multiprocessing.get_context('spawn')
 else:
