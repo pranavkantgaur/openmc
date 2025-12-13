@@ -15,6 +15,11 @@ from openmc.mpi import comm, MPI
 # When mpi4py is available, use 'spawn' instead of 'fork' to avoid issues
 # with MPI when forking processes. We detect mpi4py availability by checking
 # if MPI is a module (real mpi4py) rather than a Mock object (fallback).
+#
+# Note: The 'spawn' method starts fresh Python processes, which is slower than
+# 'fork' but necessary to prevent deadlocks when MPI has been initialized. This
+# is one of the recommended workarounds from issue #3640. The 'spawn' method is
+# available on all platforms (Unix, Windows, macOS) since Python 3.4.
 if isinstance(MPI, types.ModuleType):
     _mp_context = multiprocessing.get_context('spawn')
 else:
