@@ -3,12 +3,21 @@
 Provided to avoid some circular imports
 """
 from itertools import repeat, starmap
-from multiprocessing import Pool
+import multiprocessing
+from unittest.mock import Mock
 
 from scipy.sparse import bmat, hstack, vstack, csc_matrix
 import numpy as np
 
-from openmc.mpi import comm
+from openmc.mpi import comm, MPI
+
+# Set up multiprocessing context to be compatible with MPI
+# When mpi4py is available, use 'spawn' instead of 'fork' to avoid issues
+# with MPI when forking processes
+if not isinstance(MPI, Mock):
+    _mp_context = multiprocessing.get_context('spawn')
+else:
+    _mp_context = multiprocessing.get_context()
 
 # Configurable switch that enables / disables the use of
 # multiprocessing routines during depletion
@@ -200,7 +209,7 @@ def deplete(func, chain, n, rates, dt, current_timestep=None, matrix_func=None,
     inputs = zip(matrices, n, repeat(dt))
 
     if USE_MULTIPROCESSING:
-        with Pool(NUM_PROCESSES) as pool:
+        with _mp_context.Pool(NUM_PROCESSES) as pool:
             n_result = list(pool.starmap(func, inputs))
     else:
         n_result = list(starmap(func, inputs))
