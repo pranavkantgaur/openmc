@@ -4,7 +4,7 @@ Provided to avoid some circular imports
 """
 from itertools import repeat, starmap
 import multiprocessing
-from unittest.mock import Mock
+import types
 
 from scipy.sparse import bmat, hstack, vstack, csc_matrix
 import numpy as np
@@ -12,10 +12,10 @@ import numpy as np
 from openmc.mpi import comm, MPI
 
 # Set up multiprocessing context to be compatible with MPI
-# When mpi4py is available (MPI is not a Mock object), use 'spawn' instead of
-# 'fork' to avoid issues with MPI when forking processes. The Mock object is
-# used as a placeholder when mpi4py fails to import (see openmc/mpi.py).
-if not isinstance(MPI, Mock):
+# When mpi4py is available, use 'spawn' instead of 'fork' to avoid issues
+# with MPI when forking processes. We detect mpi4py availability by checking
+# if MPI is a module (real mpi4py) rather than a Mock object (fallback).
+if isinstance(MPI, types.ModuleType):
     _mp_context = multiprocessing.get_context('spawn')
 else:
     _mp_context = multiprocessing.get_context()
