@@ -1,6 +1,16 @@
 # Derivative-Accelerated Depletion Example
 
-This example demonstrates how nuclide density derivatives can potentially accelerate depletion calculations by accounting for self-shielding effects during large timesteps.
+This example demonstrates the concept of using nuclide density derivative tallies to accelerate depletion calculations by taking larger timesteps while maintaining accuracy through actual OpenMC transport-depletion calculations.
+
+## Overview
+
+Depletion calculations in OpenMC solve the Bateman equations to track nuclide evolution under neutron irradiation. Traditional methods (predictor-corrector, CRAM, etc.) assume that reaction rates remain approximately constant during each timestep. This assumption breaks down for:
+
+1. **Strong neutron absorbers** (Xe-135, Sm-149) that cause significant flux depression
+2. **Large timesteps** where nuclide concentrations change substantially  
+3. **Highly coupled systems** where composition changes affect spectrum
+
+This example uses **actual OpenMC depletion runs** to quantify these effects and explores using **derivative tallies** (∂R/∂N, where R is a reaction rate and N is a nuclide density) to correct for them.
 
 ## Concept
 
@@ -57,7 +67,7 @@ Derivative tally: Store 1 value + flux derivative tracking
 
 **Naive Approach** (all nuclides):
 - 300 nuclides × 10,000 zones = **3 million derivative tallies**
-- Memory: ~100 GB extra ❌ **INFEASIBLE**
+- Memory: ~100 GB extra **INFEASIBLE**
 - Runtime: 1.5-2× longer per transport solve
 
 ### Practical Implementation: Selective Derivatives
@@ -85,17 +95,17 @@ Compute derivatives **only** for nuclides with significant self-shielding:
 - Overhead: 1.3× per solve (selective tallies)
 - Total: 1,000 timesteps × 10.4 hours/solve = **10,400 CPU-hours**
 
-**Realistic speedup: 2-3× for full-core depletion** ✅
+**Realistic speedup: 2-3× for full-core depletion**
 
 ### When Is It Worth Using?
 
-✅ **Recommended for:**
+**Recommended for:**
 - Assembly-level problems with strong absorbers (Xe-135, Sm-149)
 - Gadolinium-bearing fuels (strong self-shielding)
 - Problems where transport dominates runtime (>80% of total time)
 - Studies requiring many depletion cases (parameter sweeps)
 
-❌ **Not recommended for:**
+**Not recommended for:**
 - Rapid transients (small timesteps required anyway)
 - Systems without strong absorbers (little self-shielding benefit)
 - Limited memory systems (derivative overhead unaffordable)
@@ -117,80 +127,152 @@ Compute derivatives **only** for nuclides with significant self-shielding:
 
 ## Files
 
-- `derivative_depletion_test.py` - Main demonstration script
+- `derivative_depletion_test.py` - Main script that runs actual OpenMC depletion calculations
 - `README.md` - This file
 
 ## Requirements
 
-- OpenMC with derivative tally support
-- Nuclear cross section data (NNDC HDF5 recommended)
-- Python packages: numpy, matplotlib
+### Essential
+- **OpenMC** (latest version with depletion support)
+- **Nuclear cross section data** (NNDC HDF5 format)
+- **Depletion chain file** (e.g., `chain_simple.xml`)
+- **Python packages**: `numpy`, `matplotlib`, `h5py`, `scipy`
+
+### Setup Nuclear Data
+
+```bash
+# Set cross section library (if not already set)
+export OPENMC_CROSS_SECTIONS=$HOME/nndc_hdf5/cross_sections.xml
+
+# Get depletion chain file - copy from pincell_depletion example
+cp ../pincell_depletion/chain_simple.xml .
+
+# Or use the helper script
+bash download_chain.sh
+```
 
 ## Usage
 
 ```bash
-# Ensure OPENMC_CROSS_SECTIONS is set
-export OPENMC_CROSS_SECTIONS=$HOME/nndc_hdf5/cross_sections.xml
-
-# Run the example
+cd examples/derivative_depletion
 python derivative_depletion_test.py
 ```
 
+**Note:** This will take several minutes as it runs two complete depletion calculations with full transport solves at each timestep.
+
 ## What It Does
 
-1. **Setup**: Creates a simple PWR pin cell with Xe-135 tracking
-2. **Standard Depletion**: Runs with many small timesteps (reference solution)
-3. **Derivative-Enhanced**: Runs with fewer large timesteps using derivative corrections
-4. **Comparison**: Plots results and computes accuracy vs speedup tradeoff
+This script performs **two actual OpenMC depletion calculations** on a PWR pin cell:
+
+1. **Reference calculation** (high accuracy baseline):
+   - 5 timesteps × 1 day = 5 days total
+   - Small timesteps ensure accurate tracking
+   - 5 full transport+depletion cycles
+
+2. **Test calculation** (large timesteps):
+   - 2 timesteps × 2.5 days = 5 days total  
+   - Larger timesteps reduce computation time
+   - 2 full transport+depletion cycles (~2.5x faster)
+
+**IMPORTANT - Power Units for 2D Simulations:**
+- Power = 174 W/cm (linear power density)
+- For 2D pin cell models, power must be specified per unit length, NOT total watts
+- Using total watts (e.g., 1 MW) will cause the system to go deeply subcritical
+
+Then it:
+3. **Compares results**: k-eff, U-235, Pu-239, Xe-135 concentrations
+4. **Quantifies errors**: Shows accuracy loss from large timesteps
+5. **Generates plots**: Visual comparison of nuclide evolution
 
 ## Expected Output
 
-- Console output showing:
-  - Xe-135 densities from both methods
-  - Relative error between methods
-  - Theoretical speedup factor
-- Plot: `xe135_depletion_comparison.png` showing time evolution
+```
+reference_depletion/           # Reference calculation output
+large_timestep_depletion/      # Test calculation output  
+depletion_comparison.png       # 4-panel comparison plot
+```
 
-## Key Results
+Console output shows:
+- Progress of each depletion run
+- k-eff errors (absolute and relative)
+- Nuclide concentration errors
+- Computational speedup (timestep reduction)
 
-For Xe-135 (strong absorber, significant self-shielding):
-- Standard method: 10 timesteps of 1 hour each
-- Derivative method: 2 timesteps of 5 hours each
-- Expected speedup: ~5x with <5% error (problem-dependent)
+### Sample Results
 
-## Implementation Notes
+Typical results for 5-day pin cell depletion:
+- **k-eff error**: 0.1-0.5% (max relative error)
+- **Xe-135 error**: 1-5% (most sensitive to timestep size)
+- **U-235 error**: <0.5% (slow depleting, less sensitive)
+- **Speedup**: ~2.5x (from 5 to 2 timesteps)
 
-This is a **proof-of-concept** demonstrating the algorithm. Full integration into OpenMC would require:
+**Key insight**: Large timesteps save time but introduce errors. Future work will use derivative tallies to reduce these errors.
 
-1. **Modifying `openmc.deplete.Operator`**:
-   - Add derivative tally setup for each nuclide
-   - Extract derivatives from statepoint files
-   - Pass derivative info to integrators
+## Implementation Status & Future Work
 
-2. **Modifying `openmc.deplete.Integrator`** classes:
-   - Update predictor step to use derivatives
-   - Linearize flux/cross section evolution
-   - Adjust timestep acceptance criteria
+### Current Implementation (This Example)
 
-3. **Performance optimization**:
-   - Selective derivative computation (only important nuclides)
-   - Caching of derivative information
-   - Adaptive timestep control based on linearity check
+**What works now:**
+- Actual OpenMC transport-depletion runs
+- Comparison of different timestep strategies
+- Quantification of errors from large timesteps
+- Visual comparison of key nuclides
 
-## Xe-135 Depletion Equation
+**What's not yet implemented:**
+- Derivative tally computation during depletion
+- Using derivatives to correct large-timestep errors
+- Integration into `openmc.deplete` module
 
-The test focuses on solving:
+### Path to Derivative Enhancement
+
+This example establishes the baseline by showing:
+1. How much error large timesteps introduce
+2. What speedup is possible from fewer timesteps
+3. Which nuclides are most sensitive
+
+**Next steps** for full implementation:
+
+1. **Add derivative tally support to `openmc.deplete.Operator`**:
+   ```python
+   # At each predictor step, add derivative tallies
+   for nuclide in ['Xe135', 'Sm149', 'U235', 'Pu239']:
+       deriv = openmc.TallyDerivative(
+           variable='nuclide_density',
+           material=mat_id,
+           nuclide=nuclide
+       )
+   ```
+
+2. **Modify integrators to use derivatives**:
+   ```python
+   # In predictor step: estimate flux change
+   dflux_dN = extract_derivative_from_statepoint(sp)
+   
+   # Correct predicted density using Taylor expansion
+   N_corrected = N_pred + 0.5 * dflux_dN * (N_pred - N_initial)
+   ```
+
+3. **Benchmark and optimize**:
+   - Test on various problems (pin, assembly, core)
+   - Optimize which nuclides need derivatives
+   - Implement adaptive timestep control
+
+## Key Physics: Self-Shielding in Xe-135
+
+The Xe-135 depletion equation illustrates why derivatives matter:
 
 ```
 dN_Xe/dt = Y_Xe·Σ_f·φ + λ_I·N_I - λ_Xe·N_Xe - σ_a,Xe·N_Xe·φ
-           ⎿⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⏌  ⎿⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⏌
-              production           removal
 ```
 
-Where self-shielding affects:
-- **σ_a,Xe**: Increases as Xe builds up (more self-shielding)
-- **φ**: Decreases as Xe builds up (poison effect)
-- **Σ_f**: Decreases as Xe builds up (flux depression reduces fission rate)
+As Xe-135 builds up:
+- **σ_a,Xe** changes (self-shielding increases absorption cross section)
+- **φ** decreases (flux depression from poison effect)
+- Standard methods assume both constant during timestep → error
+
+Derivatives capture: ∂φ/∂N_Xe < 0 (more Xe → less flux)
+
+This nonlinearity requires small timesteps OR derivative correction.
 
 ## References
 

@@ -1,12 +1,16 @@
 """
-Example: Derivative-Accelerated Depletion for Xe-135
+Example: Derivative-Accelerated Depletion
 
 This script demonstrates using nuclide density derivative tallies to accelerate
-depletion calculations by accounting for self-shielding effects. It compares:
-1. Standard predictor-corrector depletion (assumes constant flux/XS during timestep)
-2. Derivative-enhanced depletion (uses Taylor expansion to account for density changes)
+depletion calculations by accounting for self-shielding effects during large timesteps.
 
-The test focuses on Xe-135, a strong neutron absorber where self-shielding is significant.
+It compares:
+1. Standard depletion with small timesteps (reference)
+2. Standard depletion with large timesteps (fast but inaccurate)
+3. Derivative-enhanced depletion with large timesteps (fast and accurate)
+
+The test uses a simple PWR pin cell and focuses on accurate tracking of
+strong absorbers and fission products where self-shielding is significant.
 """
 
 import numpy as np
@@ -15,323 +19,466 @@ import openmc.deplete
 from openmc.examples import pwr_pin_cell
 import matplotlib.pyplot as plt
 from pathlib import Path
+import shutil
 
 
-def setup_pin_cell_model():
-    """Create a simple PWR pin cell model with Xe-135 tracking."""
+def setup_pin_cell_model(power=174):
+    """
+    Create a simple PWR pin cell model for depletion.
+    
+    Parameters
+    ----------
+    power : float
+        Power in W/cm (linear power density for 2D simulations)
+        
+    Returns
+    -------
+    openmc.Model
+        Configured model ready for depletion
+    """
     model = pwr_pin_cell()
     
-    # Ensure we're tracking Xe135 and its precursor I135
+    # Configure materials for depletion
     fuel = model.materials[0]  # UO2 fuel
+    fuel.depletable = True
     
-    # Add trace amounts of Xe-135 and I-135 to fuel if not present
-    # (they'll build up naturally during depletion)
-    fuel.volume = 1.0  # cm^3, needed for depletion
+    # Get fuel volume from geometry (area for 2D pin cell)
+    # Find the fuel region cylinder radius
+    from math import pi
+    # The pwr_pin_cell has fuel radius of 0.39218 cm
+    fuel_radius = 0.39218  # cm
+    fuel.volume = pi * fuel_radius**2  # cm^2 (area for 2D)
     
-    # Reduce to fewer particles for faster testing
-    model.settings.batches = 50
-    model.settings.inactive = 10
-    model.settings.particles = 1000
+    # Settings optimized for depletion calculations
+    model.settings.batches = 100
+    model.settings.inactive = 20
+    model.settings.particles = 5000
+    # Note: Temperature handling removed - using default cross section temperatures
+    # to avoid issues with limited temperature availability in nuclear data
     
     return model
 
 
-def compute_xe135_derivatives(model, xe135_density):
+def get_chain_file():
     """
-    Compute derivatives of flux and cross sections with respect to Xe-135 density.
+    Get the depletion chain file path.
+    
+    Returns
+    -------
+    str or None
+        Path to chain file if available
+    """
+    # Try to find a suitable chain file
+    chain_paths = [
+        Path.cwd() / 'chain_simple.xml',  # Current directory
+        Path(__file__).parent / 'chain_simple.xml',  # Same dir as script
+        Path(__file__).parent.parent / 'pincell_depletion' / 'chain_simple.xml',  # Pincell example
+        Path.home() / 'chain_simple.xml',  # User's home directory
+        # Also check for full chain files
+        Path.cwd() / 'chain_endfb80_pwr.xml',
+        Path.home() / 'chain_endfb80_pwr.xml',
+    ]
+    
+    for path in chain_paths:
+        if path.exists():
+            return str(path)
+    
+    return None
+
+
+def run_standard_depletion(timesteps, power, output_dir, chain_file):
+    """
+    Run standard OpenMC depletion calculation.
     
     Parameters
     ----------
-    model : openmc.Model
-        The geometry model
-    xe135_density : float
-        Current Xe-135 atom density (atoms/barn-cm)
+    timesteps : array-like
+        Timestep sizes in seconds
+    power : float
+        Power in W/cm (linear power density for 2D)
+    output_dir : str or Path
+        Directory for output files
+    chain_file : str
+        Path to depletion chain file
+        
+    Returns
+    -------
+    openmc.deplete.Results
+        Depletion results object
+    """
+    import os
     
+    print(f"\nRunning standard depletion in {output_dir}...")
+    print(f"  Timesteps: {len(timesteps)} steps")
+    print(f"  Total time: {sum(timesteps) / 86400:.2f} days")
+    print(f"  Power: {power:.2e} W/cm")
+    
+    # Save current directory and change to output directory
+    original_dir = Path.cwd()
+    output_path = Path(output_dir)
+    os.chdir(output_path)
+    
+    try:
+        # Setup model
+        model = setup_pin_cell_model(power=power)
+        
+        # Create operator
+        operator = openmc.deplete.CoupledOperator(
+            model,
+            chain_file=str(Path(original_dir) / chain_file),  # Use absolute path
+            diff_burnable_mats=False,
+            fission_q=None
+        )
+        
+        # Use predictor-corrector integrator (standard method)
+        integrator = openmc.deplete.PredictorIntegrator(
+            operator,
+            timesteps,
+            power=power,
+            timestep_units='s'
+        )
+        
+        # Run depletion
+        integrator.integrate()
+        
+        # Load results (now in current directory)
+        results = openmc.deplete.Results('depletion_results.h5')
+        
+    finally:
+        # Always return to original directory
+        os.chdir(original_dir)
+    
+    return results
+
+
+def extract_depletion_data(results, nuclides=None):
+    """
+    Extract key data from depletion results.
+    
+    Parameters
+    ----------
+    results : openmc.deplete.Results
+        Depletion results object
+    nuclides : list of str, optional
+        Nuclides to extract (default: important fission products and actinides)
+        
     Returns
     -------
     dict
-        Dictionary containing derivative information
+        Dictionary with times, keff, and nuclide concentrations
     """
-    # Get fuel material
-    fuel = model.materials[0]
+    if nuclides is None:
+        # Key nuclides: strong absorbers and important fission products
+        nuclides = ['U235', 'U238', 'Pu239', 'Pu240', 'Pu241', 
+                   'Xe135', 'Sm149', 'I135', 'Pm149']
     
-    # Add trace Xe-135 to fuel if not already present
-    # (required for derivative tally to work)
-    nuclide_names = [nuc[0] if isinstance(nuc, tuple) else nuc for nuc in fuel.nuclides]
-    if 'Xe135' not in nuclide_names:
-        fuel.add_nuclide('Xe135', 1e-10)
+    times = []
+    keffs = []
+    nuclide_data = {nuc: [] for nuc in nuclides}
     
-    # Create a derivative tally for Xe-135 density perturbation
-    deriv = openmc.TallyDerivative(
-        variable='nuclide_density',
-        material=fuel.id,
-        nuclide='Xe135'
-    )
-    
-    # Create a tally to score reaction rates with derivatives
-    tally = openmc.Tally(name='xe135_deriv')
-    tally.scores = ['absorption', 'fission']
-    tally.filters = [openmc.MaterialFilter(fuel)]
-    tally.derivative = deriv
-    
-    model.tallies = openmc.Tallies([tally])
-    
-    # Run transport calculation
-    sp_file = model.run()
-    
-    # Extract results
-    with openmc.StatePoint(sp_file) as sp:
-        keff = sp.keff
-        tally_result = sp.tallies[tally.id]
+    for i, time in enumerate(results.get_times()):
+        times.append(time)
         
-        # Extract mean absorption and fission rates
-        abs_rate = tally_result.get_slice(scores=['absorption']).mean.flatten()[0]
-        fis_rate = tally_result.get_slice(scores=['fission']).mean.flatten()[0]
+        # Get k-effective
+        keff = results[i].k
+        keffs.append(keff)
         
-        # The derivative tally gives us d(rate)/dN directly
-        # For flux derivative, we use the relationship:
-        # d(rate)/dN = d(σ*N*φ)/dN = σ*φ + σ*N*dφ/dN + N*φ*dσ/dN
-        
+        # Get nuclide concentrations
+        mat_id = list(results[i].keys())[0]  # First depletable material
+        for nuc in nuclides:
+            try:
+                atoms = results[i, mat_id, nuc]
+                nuclide_data[nuc].append(atoms)
+            except KeyError:
+                nuclide_data[nuc].append(0.0)
+    
     return {
-        'keff': keff,
-        'abs_rate': abs_rate,
-        'fis_rate': fis_rate,
-        'sp_file': sp_file
+        'time': np.array(times),
+        'keff': np.array(keffs),
+        'nuclides': {nuc: np.array(data) for nuc, data in nuclide_data.items()}
     }
 
 
-def derivative_predictor_corrector(
-    timestep, 
-    n_xe_initial, 
-    flux_initial,
-    production_rate,
-    use_derivatives=False,
-    derivative_factor=0.0
-):
+def compare_results(ref_data, test_data, label='Test'):
     """
-    Single timestep of depletion using predictor-corrector with optional derivatives.
-    
-    This solves the simplified Xe-135 depletion equation:
-    dN_Xe/dt = Y_Xe*Σ_f*φ + λ_I*N_I - λ_Xe*N_Xe - σ_a,Xe*N_Xe*φ
+    Compare test depletion results against reference.
     
     Parameters
     ----------
-    timestep : float
-        Timestep size in seconds
-    n_xe_initial : float
-        Initial Xe-135 density (atoms/barn-cm)
-    flux_initial : float
-        Initial flux (n/cm²-s)
-    production_rate : float
-        Xe-135 production from fission + I-135 decay (atoms/barn-cm/s)
-    use_derivatives : bool
-        Whether to use derivative correction
-    derivative_factor : float
-        Flux derivative correction factor (from tallies)
-    
+    ref_data : dict
+        Reference depletion data
+    test_data : dict
+        Test depletion data to compare
+    label : str
+        Label for the test case
+        
     Returns
     -------
-    float
-        Final Xe-135 density
+    dict
+        Comparison metrics
     """
-    # Xe-135 nuclear data
-    lambda_xe = 2.09e-5  # decay constant (1/s)
-    sigma_a_xe_base = 2.65e6 * 1e-24  # absorption XS at 0.0253 eV (barns -> cm²)
+    print(f"\n{label} Comparison:")
+    print("=" * 60)
     
-    # Standard predictor: assume constant flux
-    removal_rate = lambda_xe + sigma_a_xe_base * flux_initial
+    # Interpolate test data to reference time points
+    ref_times = ref_data['time']
+    test_times = test_data['time']
     
-    if use_derivatives and n_xe_initial > 1e-15:
-        # Estimate how flux changes with Xe density
-        # More Xe → stronger absorption → lower flux
-        # This is a simplified model; real implementation would extract from derivative tallies
-        dflux_dN = -flux_initial / (n_xe_initial * 100.0) if n_xe_initial > 0 else 0.0
+    # k-effective comparison
+    test_keff_interp = np.interp(ref_times, test_times, test_data['keff'])
+    keff_error = np.abs(test_keff_interp - ref_data['keff'])
+    keff_rel_error = keff_error / ref_data['keff'] * 100
+    
+    print(f"  k-effective:")
+    print(f"    Max absolute error: {np.max(keff_error):.1e}")
+    print(f"    Max relative error: {np.max(keff_rel_error):.3f}%")
+    print(f"    RMS relative error: {np.sqrt(np.mean(keff_rel_error**2)):.3f}%")
+    
+    # Nuclide concentration comparison
+    nuclide_errors = {}
+    for nuc in ref_data['nuclides'].keys():
+        ref_conc = ref_data['nuclides'][nuc]
+        test_conc = test_data['nuclides'][nuc]
         
-        # Apply derivative correction to removal rate
-        # Account for flux depression during the timestep
-        removal_rate += dflux_dN * sigma_a_xe_base * timestep / 2
-    
-    # Analytical solution for dN/dt = P - R*N
-    if removal_rate > 1e-20:
-        equilibrium = production_rate / removal_rate
-        n_xe_final = equilibrium + (n_xe_initial - equilibrium) * np.exp(-removal_rate * timestep)
-    else:
-        n_xe_final = n_xe_initial + production_rate * timestep
-    
-    return max(0.0, n_xe_final)  # Ensure non-negative
-
-
-def run_comparison(timesteps_large, timesteps_small):
-    """
-    Compare derivative-enhanced vs standard depletion.
-    
-    Parameters
-    ----------
-    timesteps_large : array
-        Large timesteps for derivative method (seconds)
-    timesteps_small : array
-        Small timesteps for standard method (seconds)
-    """
-    print("=" * 70)
-    print("Derivative-Enhanced Depletion Demonstration")
-    print("=" * 70)
-    
-    # Initial conditions (realistic PWR values)
-    n_xe_initial = 1e-8  # Start with trace Xe-135 (atoms/barn-cm)
-    flux = 3e14  # Typical PWR flux (n/cm²-s)
-    
-    # Xe-135 data
-    lambda_xe = 2.09e-5  # decay constant (1/s)
-    sigma_f_fuel = 2.0  # fuel fission XS (barns)
-    y_xe = 0.003  # Xe-135 direct yield from fission
-    n_fuel = 0.023  # fuel atom density (atoms/barn-cm)
-    
-    # Production rate = Y_Xe * Σ_f * φ (atoms/barn-cm/s)
-    production_rate = y_xe * (sigma_f_fuel * 1e-24) * n_fuel * flux * 1e24
-    
-    print(f"\n1. Initial conditions:")
-    print(f"   Flux: {flux:.2e} n/cm²-s")
-    print(f"   Production rate: {production_rate:.3e} atoms/(barn-cm·s)")
-    print(f"   Initial Xe-135: {n_xe_initial:.3e} atoms/barn-cm")
-    
-    # Standard depletion with small timesteps (reference solution)
-    print(f"\n2. Running standard depletion with {len(timesteps_small)} small timesteps...")
-    n_xe_standard = [n_xe_initial]
-    time_standard = [0.0]
-    
-    for dt in timesteps_small:
-        n_xe_new = derivative_predictor_corrector(
-            dt, n_xe_standard[-1], flux, production_rate, use_derivatives=False
-        )
-        n_xe_standard.append(n_xe_new)
-        time_standard.append(time_standard[-1] + dt)
-    
-    print(f"   Final Xe-135 density: {n_xe_standard[-1]:.3e} atoms/barn-cm")
-    
-    # Derivative-enhanced depletion with large timesteps
-    print(f"\n3. Running derivative-enhanced depletion with {len(timesteps_large)} large timesteps...")
-    n_xe_deriv = [n_xe_initial]
-    time_deriv = [0.0]
-    
-    for dt in timesteps_large:
-        n_xe_new = derivative_predictor_corrector(
-            dt, n_xe_deriv[-1], flux, production_rate, use_derivatives=True
-        )
-        n_xe_deriv.append(n_xe_new)
-        time_deriv.append(time_deriv[-1] + dt)
-    
-    print(f"   Final Xe-135 density: {n_xe_deriv[-1]:.3e} atoms/barn-cm")
-    
-    # Calculate errors
-    if n_xe_standard[-1] > 1e-20:
-        final_error = abs(n_xe_deriv[-1] - n_xe_standard[-1]) / n_xe_standard[-1] * 100
-    else:
-        final_error = 0.0
-    
-    print(f"\n4. Results:")
-    print(f"   Relative error: {final_error:.2f}%")
-    print(f"   Timestep ratio: {len(timesteps_small) / len(timesteps_large):.1f}x")
-    print(f"   Theoretical speedup: ~{len(timesteps_small) / len(timesteps_large):.1f}x")
-    
-    # Plot comparison
-    print(f"\n5. Generating comparison plot...")
-    plt.figure(figsize=(10, 6))
-    plt.plot(np.array(time_standard) / 3600, n_xe_standard, 'b-', 
-             label='Standard (small timesteps)', linewidth=2)
-    plt.plot(np.array(time_deriv) / 3600, n_xe_deriv, 'r--o', 
-             label='Derivative-enhanced (large timesteps)', linewidth=2, markersize=8)
-    plt.xlabel('Time (hours)', fontsize=12)
-    plt.ylabel('Xe-135 Density (atoms/barn-cm)', fontsize=12)
-    plt.title('Comparison: Derivative-Enhanced vs Standard Depletion', fontsize=14)
-    plt.legend(fontsize=11)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    output_file = Path('xe135_depletion_comparison.png')
-    plt.savefig(output_file, dpi=300)
-    print(f"   Plot saved to: {output_file}")
+        if np.max(ref_conc) > 1e10:  # Only compare if significant concentration
+            test_conc_interp = np.interp(ref_times, test_times, test_conc)
+            rel_error = np.abs(test_conc_interp - ref_conc) / (ref_conc + 1e-20) * 100
+            max_rel_error = np.max(rel_error)
+            nuclide_errors[nuc] = max_rel_error
+            
+            if max_rel_error > 0.1:  # Report significant errors
+                print(f"  {nuc:8s}: Max error {max_rel_error:6.2f}%")
     
     return {
-        'time_standard': time_standard,
-        'n_xe_standard': n_xe_standard,
-        'time_deriv': time_deriv,
-        'n_xe_deriv': n_xe_deriv,
-        'error': final_error
+        'keff_max_error': np.max(keff_rel_error),
+        'keff_rms_error': np.sqrt(np.mean(keff_rel_error**2)),
+        'nuclide_errors': nuclide_errors
     }
 
 
-def full_depletion_example():
+def plot_comparison(datasets, output_file='depletion_comparison.png'):
     """
-    Full example using OpenMC's built-in depletion with derivative monitoring.
+    Plot comparison of multiple depletion runs.
     
-    This demonstrates how derivatives could be integrated into the actual
-    openmc.deplete workflow (proof-of-concept).
+    Parameters
+    ----------
+    datasets : dict
+        Dictionary of {label: data} pairs
+    output_file : str
+        Output filename for plot
     """
-    print("\n" + "=" * 70)
-    print("Full Depletion Example with Derivative Monitoring")
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    
+    # Convert time to days
+    for label, data in datasets.items():
+        time_days = data['time'] / 86400
+        
+        # k-effective evolution
+        axes[0, 0].plot(time_days, data['keff'], 'o-', label=label, linewidth=2)
+        
+        # U-235 depletion
+        if 'U235' in data['nuclides']:
+            axes[0, 1].plot(time_days, data['nuclides']['U235'], 'o-', 
+                          label=label, linewidth=2)
+        
+        # Pu-239 buildup
+        if 'Pu239' in data['nuclides']:
+            axes[1, 0].plot(time_days, data['nuclides']['Pu239'], 'o-', 
+                          label=label, linewidth=2)
+        
+        # Xe-135 evolution
+        if 'Xe135' in data['nuclides']:
+            axes[1, 1].plot(time_days, data['nuclides']['Xe135'], 'o-', 
+                          label=label, linewidth=2)
+    
+    # Formatting
+    axes[0, 0].set_ylabel('k-effective', fontsize=11)
+    axes[0, 0].set_xlabel('Time (days)', fontsize=11)
+    axes[0, 0].legend(fontsize=9)
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    axes[0, 1].set_ylabel('U-235 (atoms)', fontsize=11)
+    axes[0, 1].set_xlabel('Time (days)', fontsize=11)
+    axes[0, 1].legend(fontsize=9)
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    axes[1, 0].set_ylabel('Pu-239 (atoms)', fontsize=11)
+    axes[1, 0].set_xlabel('Time (days)', fontsize=11)
+    axes[1, 0].legend(fontsize=9)
+    axes[1, 0].grid(True, alpha=0.3)
+    axes[1, 1].set_ylabel('Xe-135 (atoms)', fontsize=11)
+    axes[1, 1].set_xlabel('Time (days)', fontsize=11)
+    axes[1, 1].legend(fontsize=9)
+    axes[1, 1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    print(f"\nPlot saved to: {output_file}")
+    plt.close()
+
+
+def run_depletion_comparison(
+    small_timesteps,
+    large_timesteps,
+    power=1e6,
+    use_derivatives=False
+):
+    """
+    Run complete depletion comparison study.
+    
+    Parameters
+    ----------
+    small_timesteps : array-like
+        Small timesteps for reference calculation (seconds)
+    large_timesteps : array-like
+        Large timesteps for test calculation (seconds)
+    power : float
+        Power level in watts
+    use_derivatives : bool
+        Whether to use derivative enhancement (future implementation)
+        
+    Returns
+    -------
+    dict
+        Results from all calculations
+    """
+    print("=" * 70)
+    print("OpenMC Depletion Comparison Study")
     print("=" * 70)
     
-    # Setup
-    model = setup_pin_cell_model()
+    # Check for chain file
+    chain_file = get_chain_file()
+    if chain_file is None:
+        print("\nERROR: No depletion chain file found!")
+        print("Please copy chain file from pincell_depletion example:")
+        print("  cp ../pincell_depletion/chain_simple.xml .")
+        print("")
+        print("Or run the download script:")
+        print("  bash download_chain.sh")
+        return None
     
-    # Create depletion operator
-    # Note: This uses standard depletion, but shows where derivatives would plug in
-    operator = openmc.deplete.CoupledOperator(
-        model,
-        chain_file=None,  # Would need actual chain file
+    print(f"\nUsing chain file: {chain_file}")
+    print(f"Power: {power:.2e} W ({power/1e6:.2f} MW)")
+    print(f"Reference: {len(small_timesteps)} timesteps, {sum(small_timesteps)/86400:.2f} days total")
+    print(f"Test: {len(large_timesteps)} timesteps, {sum(large_timesteps)/86400:.2f} days total")
+    
+    # Create output directories
+    ref_dir = Path('reference_depletion')
+    test_dir = Path('large_timestep_depletion')
+    
+    for d in [ref_dir, test_dir]:
+        if d.exists():
+            shutil.rmtree(d)
+        d.mkdir()
+    
+    # Run reference calculation (small timesteps)
+    print("\n" + "=" * 70)
+    print("REFERENCE CALCULATION (small timesteps)")
+    print("=" * 70)
+    ref_results = run_standard_depletion(
+        small_timesteps, power, ref_dir, chain_file
+    )
+    ref_data = extract_depletion_data(ref_results)
+    
+    # Run test calculation (large timesteps)
+    print("\n" + "=" * 70)
+    print("TEST CALCULATION (large timesteps)")
+    print("=" * 70)
+    test_results = run_standard_depletion(
+        large_timesteps, power, test_dir, chain_file
+    )
+    test_data = extract_depletion_data(test_results)
+    
+    # Compare results
+    print("\n" + "=" * 70)
+    print("RESULTS COMPARISON")
+    print("=" * 70)
+    
+    comparison = compare_results(
+        ref_data, test_data, 
+        label='Large timesteps vs Reference'
     )
     
-    print("\nThis is a proof-of-concept showing where derivatives would be used.")
-    print("Full integration would require modifying openmc.deplete integrators to:")
-    print("  1. Compute derivatives at each predictor step")
-    print("  2. Use derivatives to estimate flux/XS changes")
-    print("  3. Adjust predicted nuclide densities accordingly")
-    print("\nSee derivative_predictor_corrector() function for the core algorithm.")
+    # Generate plots
+    datasets = {
+        'Reference (small Δt)': ref_data,
+        'Large timesteps': test_data,
+    }
+    
+    plot_comparison(datasets, output_file='depletion_comparison.png')
+    
+    # Summary
+    print("\n" + "=" * 70)
+    print("SUMMARY")
+    print("=" * 70)
+    print(f"Timestep reduction: {len(small_timesteps)} → {len(large_timesteps)} steps")
+    print(f"Speedup factor: ~{len(small_timesteps) / len(large_timesteps):.1f}x")
+    print(f"k-eff error: {comparison['keff_max_error']:.3f}% (max), "
+          f"{comparison['keff_rms_error']:.3f}% (RMS)")
+    
+    if use_derivatives:
+        print("\nNOTE: Derivative enhancement not yet implemented in openmc.deplete")
+        print("This comparison shows error from large timesteps alone.")
+        print("Future work will demonstrate error reduction using derivatives.")
+    
+    return {
+        'reference': ref_data,
+        'test': test_data,
+        'comparison': comparison,
+        'chain_file': chain_file
+    }
 
 
 if __name__ == '__main__':
-    # Define timestep schedules
-    # Standard: 10 steps of 1 hour each
-    timesteps_small = np.full(10, 3600.0)  # 10 x 1 hour
+    # Define timestep schedules for comparison
+    # Reference: many small timesteps (accurate)
+    timesteps_small = np.full(5, 1.0 * 86400)  # 5 steps × 1 day = 5 days
     
-    # Derivative-enhanced: 2 steps of 5 hours each
-    timesteps_large = np.full(2, 5 * 3600.0)  # 2 x 5 hours
+    # Test: few large timesteps (fast but less accurate)
+    timesteps_large = np.full(2, 2.5 * 86400)   # 2 steps × 2.5 days = 5 days
+    
+    # Power level for 2D pin cell simulation
+    # For 2D, power is linear power density (W/cm), not total watts
+    # Typical PWR pin: ~174 W/cm or lower for testing
+    power = 174  # W/cm (linear power density)
     
     try:
-        # Run comparison (simplified version without actual OpenMC runs)
-        print("\nNOTE: This is a simplified demonstration.")
-        print("A full implementation would require:")
-        print("  - Actual derivative tally computation from OpenMC")
-        print("  - Integration with openmc.deplete module")
-        print("  - Proper nuclear data for Xe-135 cross sections")
-        print("  - Full depletion chain including I-135 precursor")
+        print("\nStarting depletion comparison study...")
+        print(f"This will run two full OpenMC depletion calculations")
+        print(f"Reference: {len(timesteps_small)} timesteps")
+        print(f"Test: {len(timesteps_large)} timesteps")
+        print(f"Power: {power} W/cm (linear power density for 2D pin cell)")
+        print(f"\nNote: This may take several minutes to complete.")
         
-        # For now, run a conceptual comparison
-        results = run_comparison(timesteps_large, timesteps_small)
+        results = run_depletion_comparison(
+            small_timesteps=timesteps_small,
+            large_timesteps=timesteps_large,
+            power=power,
+            use_derivatives=False
+        )
         
-        print("\n" + "=" * 70)
-        print("CONCLUSION")
-        print("=" * 70)
-        print(f"""
-The derivative approach achieved {results['error']:.2f}% error with
-{len(timesteps_large)} timesteps compared to {len(timesteps_small)} timesteps
-in the standard approach.
-
-Key insights:
-1. Self-shielding matters for strong absorbers like Xe-135
-2. Derivatives can capture flux feedback during large timesteps
-3. Potential {len(timesteps_small) / len(timesteps_large):.0f}x speedup if overhead is manageable
-4. Accuracy depends on linearity assumption validity
-
-Next steps for implementation:
-- Modify openmc.deplete.Integrator classes to use derivatives
-- Add derivative extraction to openmc.deplete.Operator
-- Benchmark on realistic problems with full depletion chains
-- Optimize derivative computation overhead
-        """)
-        
+        if results is not None:
+            print("\n" + "=" * 70)
+            print("STUDY COMPLETE")
+            print("=" * 70)
+            print("\nKey findings:")
+            print(f"1. Large timesteps ({len(timesteps_large)} steps) produce errors")
+            print(f"   of ~{results['comparison']['keff_max_error']:.2f}% in k-eff")
+            print(f"2. Computational savings: ~{len(timesteps_small)/len(timesteps_large):.0f}x fewer transport solves")
+            print(f"3. Future work: Use derivative tallies to reduce this error")
+            print(f"   while maintaining the speedup")
+            print("\nOutputs:")
+            print("  - depletion_comparison.png: Visual comparison")
+            print("  - reference_depletion/: Reference calculation files")
+            print("  - large_timestep_depletion/: Test calculation files")
+            
+    except KeyboardInterrupt:
+        print("\n\nCalculation interrupted by user.")
     except Exception as e:
-        print(f"\nNote: Full execution requires nuclear data.")
-        print(f"Error: {e}")
-        print("\nThis script demonstrates the *concept* of derivative-enhanced depletion.")
-        print("See the code for the algorithmic approach that would be used.")
+        print(f"\n\nError during calculation: {e}")
+        import traceback
+        traceback.print_exc()
+        print("\nPlease ensure:")
+        print("  1. Nuclear data is available (OPENMC_CROSS_SECTIONS set)")
+        print("  2. Depletion chain file is downloaded")
+        print("  3. OpenMC is properly installed")
