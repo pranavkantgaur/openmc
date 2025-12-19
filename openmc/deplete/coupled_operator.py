@@ -439,7 +439,7 @@ class CoupledOperator(OpenMCOperator):
         if source_rate == 0.0:
             rates = self.reaction_rates.copy()
             rates.fill(0.0)
-            return OperatorResult(ufloat(0.0, 0.0), rates)
+            return OperatorResult(ufloat(0.0, 0.0), rates, None)
 
         # Run OpenMC
         openmc.lib.run()
@@ -450,7 +450,10 @@ class CoupledOperator(OpenMCOperator):
         # Get k and uncertainty
         keff = ufloat(*openmc.lib.keff())
 
-        op_result = OperatorResult(keff, rates)
+        # Extract derivative tally data if present
+        derivatives = self._extract_derivative_data()
+
+        op_result = OperatorResult(keff, rates, derivatives)
 
         self._n_calls += 1
 
@@ -498,6 +501,63 @@ class CoupledOperator(OpenMCOperator):
 
                 # TODO Update densities on the Python side, otherwise the
                 # summary.h5 file contains densities at the first time step
+
+    def _extract_derivative_data(self):
+        """Extract derivative tally data from OpenMC tallies.
+
+        Returns
+        -------
+        derivatives : dict or None
+            Dictionary mapping (material_id, nuclide) tuples to derivative data.
+            Returns None if no derivative tallies are present in the model.
+        """
+        # Check if model has tallies with derivatives
+        if not self.model.tallies:
+            return None
+
+        derivatives = {}
+        
+        # Iterate through all tallies to find ones with derivatives
+        for tally in self.model.tallies:
+            if tally.derivative is None:
+                continue
+            
+            deriv = tally.derivative
+            
+            # Only handle nuclide_density derivatives for now
+            if deriv.variable != 'nuclide_density':
+                continue
+            
+            # Get the material and nuclide for this derivative
+            mat_id = str(deriv.material)
+            nuclide = deriv.nuclide
+            
+            # Extract tally results using the C API via openmc.lib
+            try:
+                # Get the tally from the C API
+                tally_lib = openmc.lib.tallies[tally.id]
+                
+                # Get the mean values from the tally
+                # The results array has shape (n_filters, n_nuclides, n_scores, 3)
+                # where the last dimension is [sum, sum_sq, N]
+                results = tally_lib.results
+                
+                # Store the mean values (sum / N) for this derivative
+                # For now, we store the full results array
+                # The integrator will need to process this appropriately
+                derivatives[(mat_id, nuclide)] = {
+                    'tally_id': tally.id,
+                    'results': results,
+                    'scores': tally.scores
+                }
+                
+            except (KeyError, AttributeError) as e:
+                # Tally might not be available in C API yet
+                # or results haven't been computed
+                warn(f"Could not extract derivative data for tally {tally.id}: {e}")
+                continue
+        
+        return derivatives if derivatives else None
 
     @staticmethod
     def write_bos_data(step):

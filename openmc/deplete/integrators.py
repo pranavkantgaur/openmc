@@ -462,7 +462,7 @@ class SICELIIntegrator(SIIntegrator):
             else:
                 rates = 1/j * inter_res.rates + (1 - 1 / j) * res_bar.rates
                 k = 1/j * inter_res.k + (1 - 1 / j) * res_bar.k
-                res_bar = OperatorResult(k, rates)
+                res_bar = OperatorResult(k, rates, None)
 
             list_rates = list(zip(bos_rates, res_bar.rates))
             time1, n_inter = self._timed_deplete(
@@ -546,7 +546,7 @@ class SILEQIIntegrator(SIIntegrator):
             else:
                 rates = 1 / j * inter_res.rates + (1 - 1 / j) * res_bar.rates
                 k = 1 / j * inter_res.k + (1 - 1 / j) * res_bar.k
-                res_bar = OperatorResult(k, rates)
+                res_bar = OperatorResult(k, rates, None)
 
             inputs = list(zip(self._prev_rates, bos_rates, res_bar.rates,
                               repeat(prev_dt), repeat(dt)))

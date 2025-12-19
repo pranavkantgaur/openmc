@@ -407,7 +407,7 @@ class IndependentOperator(OpenMCOperator):
         if source_rate == 0.0:
             rates = self.reaction_rates.copy()
             rates.fill(0.0)
-            return OperatorResult(ufloat(0.0, 0.0), rates)
+            return OperatorResult(ufloat(0.0, 0.0), rates, None)
 
         rates = self._calculate_reaction_rates(source_rate)
         keff = self._keff
