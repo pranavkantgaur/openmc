@@ -1,5 +1,7 @@
 # The Curve Fitting Analogy: Derivative-Based Depletion and Computer Graphics
 
+> **Quick Start:** Run `python hermite_analogy_demo.py` to see a visual demonstration of this analogy with side-by-side comparisons.
+
 ## Executive Summary
 
 **Yes, the role and merit of depletion calculations using nuclide derivatives is remarkably similar to curve fitting using points and their derivatives in computer graphics.**

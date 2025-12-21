@@ -12,6 +12,17 @@ The derivative-based depletion correction algorithm is **complete and functional
 2. **Infrastructure**: Derivative tallies are extracted from OpenMC and passed through the depletion workflow
 3. **Safety Mechanisms**: Correction limits (±50%), non-negativity constraints, MPI-aware processing
 
+### Understand the Analogy (30 seconds, no OpenMC required)
+
+```bash
+cd examples/derivative_depletion
+python hermite_analogy_demo.py
+```
+
+**What it does**: Creates side-by-side comparison of Hermite interpolation (graphics) and derivative depletion (physics)  
+**Output**: `hermite_analogy_comparison.png` showing visual parallel + comparison table  
+**Learn**: Why derivative information reduces sampling while maintaining accuracy
+
 ### Quick Test (< 1 minute)
 
 ```bash
@@ -180,6 +191,7 @@ Compute derivatives **only** for nuclides with significant self-shielding:
 ## Files
 
 - `derivative_depletion_test.py` - Main script that runs actual OpenMC depletion calculations
+- `hermite_analogy_demo.py` - **NEW**: Visual demonstration of the Hermite interpolation analogy (no OpenMC required)
 - `CURVE_FITTING_ANALOGY.md` - Detailed comparison to Hermite interpolation in computer graphics
 - `DEPLETION_PRIMER.md` - Comprehensive technical guide to implementation
 - `README.md` - This file
