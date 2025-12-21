@@ -2,6 +2,8 @@
 
 This example demonstrates derivative-based depletion corrections in OpenMC, using nuclide density derivative tallies to accelerate depletion calculations by taking larger timesteps while maintaining accuracy.
 
+> **💡 NEW: Curve Fitting Analogy** - This technique is mathematically identical to Hermite interpolation in computer graphics! See [SUMMARY.md](SUMMARY.md) for a quick visual comparison, or [CURVE_FITTING_ANALOGY.md](CURVE_FITTING_ANALOGY.md) for the full 12-part analysis.
+
 ## Implementation Status
 
 ### FULLY IMPLEMENTED
@@ -190,8 +192,10 @@ Compute derivatives **only** for nuclides with significant self-shielding:
 
 ## Files
 
+- `SUMMARY.md` - **START HERE**: Quick answer and visual demonstration of the curve fitting analogy
+- `MATHEMATICAL_EXPLANATION.md` - **NEW**: Rigorous proof that derivatives reduce OpenMC runs while maintaining accuracy
 - `derivative_depletion_test.py` - Main script that runs actual OpenMC depletion calculations
-- `hermite_analogy_demo.py` - **NEW**: Visual demonstration of the Hermite interpolation analogy (no OpenMC required)
+- `hermite_analogy_demo.py` - Visual demonstration of the Hermite interpolation analogy (no OpenMC required)
 - `CURVE_FITTING_ANALOGY.md` - Detailed comparison to Hermite interpolation in computer graphics
 - `DEPLETION_PRIMER.md` - Comprehensive technical guide to implementation
 - `README.md` - This file
