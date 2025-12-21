@@ -56,11 +56,33 @@ The derivative approach linearizes these quantities around the current state:
 
 This allows larger timesteps while maintaining accuracy by predicting how the system evolves as nuclide densities change.
 
-## Motivation & Analogy
+## Motivation & Analogies
+
+### Comparison to Computer Graphics (Hermite Splines)
+
+**See [CURVE_FITTING_ANALOGY.md](CURVE_FITTING_ANALOGY.md) for detailed comparison.**
+
+The derivative-based depletion approach is mathematically identical to **Hermite interpolation** in computer graphics:
+
+**Computer Graphics:**
+- Uses position + tangent (derivative) at keyframes
+- Hermite splines create smooth curves between sparse control points
+- Fewer keyframes needed for same smoothness
+
+**Reactor Depletion:**
+- Uses flux + flux gradient (∂φ/∂N) at timesteps  
+- Derivative corrections predict evolution between sparse samples
+- Larger timesteps possible for same accuracy
+
+**Key Insight:** Both use **Taylor expansion with derivatives** to reduce sampling frequency while maintaining accuracy. This is the same principle that enabled smooth computer animation (Pixar, video games) and can now enable efficient reactor depletion.
+
+**Impact Comparison:**
+- **Graphics:** 4× fewer keyframes → made feature-length animation practical
+- **Depletion:** 3× fewer timesteps → could make daily full-core simulations practical
 
 ### Comparison to Molecular Dynamics
 
-The Bateman depletion equations share similarities with molecular dynamics (MD) simulations:
+The Bateman depletion equations also share similarities with molecular dynamics (MD) simulations:
 
 **Similarities:**
 - Both solve **systems of coupled ODEs** describing temporal evolution
@@ -158,6 +180,8 @@ Compute derivatives **only** for nuclides with significant self-shielding:
 ## Files
 
 - `derivative_depletion_test.py` - Main script that runs actual OpenMC depletion calculations
+- `CURVE_FITTING_ANALOGY.md` - Detailed comparison to Hermite interpolation in computer graphics
+- `DEPLETION_PRIMER.md` - Comprehensive technical guide to implementation
 - `README.md` - This file
 
 ## Requirements

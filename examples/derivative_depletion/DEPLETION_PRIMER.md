@@ -2,6 +2,8 @@
 
 A practical guide for implementing derivative-accelerated depletion in OpenMC.
 
+> **Note:** For a detailed analogy comparing this technique to Hermite interpolation in computer graphics, see [CURVE_FITTING_ANALOGY.md](CURVE_FITTING_ANALOGY.md). The mathematical and conceptual parallels are striking - both use derivative information to reduce sampling frequency while maintaining accuracy.
+
 ---
 
 ## Part 1: Core Concepts
