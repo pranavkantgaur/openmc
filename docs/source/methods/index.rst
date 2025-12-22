@@ -16,6 +16,7 @@ Theory and Methodology
     photon_physics
     charged_particles_physics
     tallies
+    derivative_tallies
     eigenvalue
     depletion
     energy_deposition
