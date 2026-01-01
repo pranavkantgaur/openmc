@@ -1,0 +1,49 @@
+name: AI Issue Responder
+
+on:
+  issues:
+    types: [opened]
+  # Allow manual triggering for testing
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to process (leave empty to process latest)'
+        required: false
+        type: number
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  respond-to-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install PyGithub openai anthropic requests
+
+      - name: Analyze and respond to issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python tools/ai/issue_responder.py \
+            --repo ${{ github.repository }} \
+            --issue-number ${{ github.event.issue.number || github.event.inputs.issue_number }} \
+            --dry-run false
+
+      - name: Summary
+        run: |
+          echo "✅ AI analysis and response completed for issue #${{ github.event.issue.number || github.event.inputs.issue_number }}"
