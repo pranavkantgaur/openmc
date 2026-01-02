@@ -2,6 +2,14 @@
 
 This directory contains AI-powered tools for automating issue triage and response in the OpenMC repository.
 
+## Contents
+
+- **GitHub Action** - Automated issue responder
+- **Python Scripts** - Issue responder and validation tools
+- **Jupyter Notebook** - Statistical analysis and visualization
+- **Comparison Guide** - Analysis of alternative AI tools
+- **Documentation** - Setup guides and examples
+
 ## Components
 
 ### 1. GitHub Action: AI Issue Responder
@@ -42,6 +50,12 @@ python issue_responder.py \
 
 Validates the issue responder against real issues to measure performance.
 
+### 4. Analysis Notebook
+
+**File**: `issue_analysis.ipynb`
+
+Jupyter notebook for statistical and visual analysis of validation results.
+
 **Features:**
 - Fetches issues from GitHub repository
 - Categorizes and analyzes issue distribution
@@ -62,6 +76,31 @@ python validate_issue_responder.py \
     --output-dir test_results \
     --state all
 ```
+
+**Features:**
+- Categorizes issues by type and complexity
+- Creates stratified test cases
+- Generates comprehensive validation reports
+- Outputs JSON data for further analysis
+
+**Analysis Notebook:**
+
+After running validation, use the Jupyter notebook for visual analysis:
+
+```bash
+# Install additional dependencies
+pip install pandas matplotlib seaborn jupyter
+
+# Launch Jupyter
+jupyter notebook tools/ai/issue_analysis.ipynb
+```
+
+The notebook provides:
+- Issue type and complexity distribution charts
+- Temporal pattern analysis
+- Response characteristics visualization
+- Classification accuracy metrics
+- Statistical summaries and CSV exports
 
 ## Setup
 
@@ -274,6 +313,20 @@ To improve the AI tools:
 3. **Add test cases**: Include edge cases in validation
 4. **Extend validation**: Add more metrics and analysis
 5. **Documentation**: Improve examples and usage instructions
+
+## Comparison with Other AI Tools
+
+See `AI_TOOLS_COMPARISON.md` for a detailed comparison with:
+- AI Assessment Comment Labeler (GitHub Marketplace)
+- Dosu.dev (Advanced AI support bot)
+- Block/Goose (Developer AI assistant)
+
+The comparison covers:
+- Codebase context building capabilities
+- Issue triage and resolution features
+- Cost and pricing models
+- Suitability for OpenMC
+- Trade-offs and recommendations
 
 ## License
 
