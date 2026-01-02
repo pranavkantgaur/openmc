@@ -321,7 +321,16 @@ See `AI_TOOLS_COMPARISON.md` for a detailed comparison with:
 - Dosu.dev (Advanced AI support bot)
 - Block/Goose (Developer AI assistant)
 
-The comparison covers:
+For a specific comparison between **GitHub Copilot vs Dosu.dev** for issue triage, including:
+- Hallucination mitigation strategies
+- Codebase context building approaches
+- Cost structures and billing
+- Subscription requirements for issue posters
+- Customization and control options
+
+See `COPILOT_VS_DOSU_COMPARISON.md` for detailed analysis.
+
+The comparisons cover:
 - Codebase context building capabilities
 - Issue triage and resolution features
 - Cost and pricing models

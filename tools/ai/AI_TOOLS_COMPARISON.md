@@ -2,6 +2,8 @@
 
 This document provides a detailed comparison and assessment of various AI-driven GitHub issue triage tools, including our implementation and third-party alternatives.
 
+> **Note**: For a detailed comparison specifically between GitHub Copilot and Dosu.dev for issue triage, including hallucination mitigation strategies, cost analysis, and subscription requirements, see [COPILOT_VS_DOSU_COMPARISON.md](COPILOT_VS_DOSU_COMPARISON.md).
+
 ## Table of Contents
 1. [Our Implementation](#our-implementation)
 2. [AI Assessment Comment Labeler](#ai-assessment-comment-labeler)
