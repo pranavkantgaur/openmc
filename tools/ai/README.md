@@ -8,6 +8,7 @@ This directory contains AI-powered tools for automating issue triage and respons
 - **Python Scripts** - Issue responder and validation tools
 - **Jupyter Notebook** - Statistical analysis and visualization
 - **Comparison Guide** - Analysis of alternative AI tools
+- **Dosu Validation** - Tools to validate Dosu.dev performance
 - **Documentation** - Setup guides and examples
 
 ## Components
@@ -101,6 +102,94 @@ The notebook provides:
 - Response characteristics visualization
 - Classification accuracy metrics
 - Statistical summaries and CSV exports
+
+### 5. Dosu.dev Validation Tool
+
+**File**: `validate_dosu.py`
+
+Validates Dosu.dev's performance on closed OpenMC issues.
+
+**Purpose**: Before deploying Dosu.dev for OpenMC, validate its effectiveness by testing on historical closed issues.
+
+**Features:**
+- Fetches closed issues with complete conversation history
+- Extracts closing PR details (conversations, file changes)
+- Identifies the commit context for codebase indexing
+- Generates prompts for Dosu evaluation
+- Creates structured validation dataset
+
+**Usage:**
+```bash
+# Set GitHub token
+export GITHUB_TOKEN=your_token_here
+
+# Run validation data collection
+python validate_dosu.py \
+    --repo openmc-dev/openmc \
+    --max-issues 50 \
+    --output-dir dosu_validation
+```
+
+**Output Structure:**
+```
+dosu_validation/
+├── validation_manifest.json    # Index of all validation cases
+├── issues/                      # Issue data (JSON)
+│   ├── issue_123.json
+│   └── ...
+├── pull_requests/               # PR data (JSON)
+│   ├── pr_789.json
+│   └── ...
+└── dosu_responses/              # Dosu prompts and responses
+    ├── prompt_issue_123.txt     # Prompt for Dosu
+    └── dosu_response_issue_123.txt  # Dosu's response (manual)
+```
+
+**Workflow:**
+1. Run `validate_dosu.py` to collect issue/PR data
+2. Review prompts in `dosu_responses/prompt_issue_*.txt`
+3. Obtain Dosu responses (via Dosu service, API, or manual)
+4. Save responses as `dosu_response_issue_*.txt`
+5. Create evaluations in `evaluations/eval_issue_*.json`
+6. Run `analyze_dosu_validation.py` to generate performance report
+
+**Evaluation Format:**
+```json
+{
+  "issue_number": 123,
+  "dosu_response_quality": {
+    "accuracy_score": 4,
+    "relevance_score": 5,
+    "helpfulness_score": 4,
+    "code_context_used": true,
+    "hallucination_detected": false,
+    "matches_actual_resolution": true
+  },
+  "notes": "Detailed evaluation notes..."
+}
+```
+
+### 6. Dosu Analysis Tool
+
+**File**: `analyze_dosu_validation.py`
+
+Analyzes Dosu validation results and generates performance reports.
+
+**Usage:**
+```bash
+python analyze_dosu_validation.py --validation-dir dosu_validation
+```
+
+**Output:**
+- `analysis_results.json` - Statistical metrics
+- `VALIDATION_REPORT.md` - Human-readable report with recommendations
+
+**Metrics:**
+- Accuracy, relevance, and helpfulness scores (1-5 scale)
+- Code context usage percentage
+- Hallucination detection rate
+- Resolution matching percentage
+- Overall performance rating and recommendations
 
 ## Setup
 
