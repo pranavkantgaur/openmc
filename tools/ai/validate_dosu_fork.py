@@ -215,6 +215,30 @@ class DosuForkValidator:
         
         return min(score, 5)
     
+    def sanitize_github_mentions(self, text: str) -> str:
+        """
+        Remove GitHub @ mentions to prevent notification spam.
+        
+        Parameters
+        ----------
+        text : str
+            Text that may contain @username mentions
+        
+        Returns
+        -------
+        str
+            Text with @ mentions replaced
+        """
+        if not text:
+            return text
+        
+        # Replace @username with just username (wrapped in backticks to preserve context)
+        # Matches @ followed by alphanumeric, hyphens, but not if already in code blocks
+        # Use a simple approach: replace @username with `username`
+        sanitized = re.sub(r'@([a-zA-Z0-9][-a-zA-Z0-9]*)', r'`\1`', text)
+        
+        return sanitized
+    
     def fetch_representative_issues(
         self, 
         upstream_repo_name: str,
@@ -356,10 +380,13 @@ class DosuForkValidator:
             
             for upstream_issue in issues:
                 # Prepare issue body - copy original content without upstream references
-                new_body = upstream_issue.body or "No description provided"
+                # Sanitize @ mentions to prevent notification spam
+                new_body = self.sanitize_github_mentions(
+                    upstream_issue.body or "No description provided"
+                )
                 
-                # Use original title without test prefix
-                new_title = upstream_issue.title
+                # Use original title without test prefix (also sanitize)
+                new_title = self.sanitize_github_mentions(upstream_issue.title)
                 
                 # Get labels (create if needed)
                 labels_to_add = [category]
