@@ -250,9 +250,9 @@ class DosuForkValidator:
             
             # Fetch issues with this label
             label_map = {
-                'bug': 'bug',
-                'enhancement': 'enhancement',
-                'question': 'question'
+                'bug': 'Bugs',
+                'documentation': 'Documentation',
+                'help wanted': 'help wanted',
             }
             
             label_name = label_map.get(category, category)
@@ -355,24 +355,11 @@ class DosuForkValidator:
             print(f"\nCreating {category} issues...")
             
             for upstream_issue in issues:
-                # Prepare issue body with reference to original
-                new_body = f"""**[DOSU VALIDATION TEST]**
-
-This is a test issue created from upstream issue #{upstream_issue.number} to validate Dosu.dev's performance.
-
-**Original Issue URL:** {upstream_issue.html_url}
-
----
-
-{upstream_issue.body or "No description provided"}
-
----
-
-**Expected Resolution:**
-This issue was originally resolved in upstream. Dosu should provide guidance that aligns with the actual resolution.
-"""
+                # Prepare issue body - copy original content without upstream references
+                new_body = upstream_issue.body or "No description provided"
                 
-                new_title = f"[TEST] {upstream_issue.title}"
+                # Use original title without test prefix
+                new_title = upstream_issue.title
                 
                 # Get labels (create if needed)
                 labels_to_add = [category]
@@ -709,7 +696,7 @@ Based on manual evaluation, document:
         upstream_repo_name: str,
         fork_repo_name: str,
         dry_run: bool = True,
-        categories: List[str] = ['bug', 'enhancement', 'question'],
+        categories: List[str] = ['bug', 'documentation', 'help wanted'],
         per_category: int = 5,
         monitor_wait: int = 3600
     ) -> Dict:
@@ -837,7 +824,7 @@ def main():
         '--categories',
         nargs='+',
         default=['bug', 'enhancement', 'question'],
-        help='Issue categories to test'
+        help='Issue categories to test (quote multi-word labels: "help wanted")'
     )
     parser.add_argument(
         '--per-category',
