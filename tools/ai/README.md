@@ -191,6 +191,90 @@ python analyze_dosu_validation.py --validation-dir dosu_validation
 - Resolution matching percentage
 - Overall performance rating and recommendations
 
+### 7. Dosu Fork Validation Tool
+
+**File**: `validate_dosu_fork.py`
+
+Automates validation of Dosu.dev on a fork repository using representative historical issues.
+
+**Purpose**: Since Dosu lacks a public API and cannot be easily configured programmatically, this tool validates Dosu by creating test issues in a fork and monitoring its automatic responses.
+
+**Validation Strategy:**
+1. Sync fork's develop branch with upstream
+2. Clean existing issues in fork (creates clean slate)
+3. Fetch representative closed issues from upstream (by category and difficulty)
+4. Create these test issues in the fork
+5. Monitor Dosu's automatic responses
+6. Compare Dosu's responses with actual upstream resolutions
+
+**Features:**
+- Fetches top-N representative issues per category (bug, enhancement, question)
+- Selects issues across difficulty spectrum (trivial to very complex)
+- Creates test issues with reference to original upstream issues
+- Monitors fork for Dosu responses with configurable timeout
+- Generates side-by-side comparisons with actual resolutions
+- Dry-run mode for planning
+- Comprehensive JSON output for manual evaluation
+
+**Usage:**
+```bash
+# Set GitHub token (needs repo scope for fork access)
+export GITHUB_TOKEN=your_token_here
+
+# Dry run to preview
+python validate_dosu_fork.py \
+    --upstream-repo openmc-dev/openmc \
+    --fork-repo pranavkantgaur/openmc \
+    --dry-run
+
+# Live validation (creates issues, monitors Dosu)
+python validate_dosu_fork.py \
+    --upstream-repo openmc-dev/openmc \
+    --fork-repo pranavkantgaur/openmc \
+    --categories bug enhancement question \
+    --per-category 5 \
+    --monitor-wait 3600
+```
+
+**Output Structure:**
+```
+dosu_fork_validation/
+├── VALIDATION_SUMMARY.md           # Summary report
+├── upstream_issues_summary.json    # Selected upstream issues
+├── fork_issues_manifest.json       # Created test issues
+├── dosu_responses_all.json         # Dosu's responses
+├── comparisons_all.json            # All comparisons
+├── upstream_issues/                # Upstream issue data
+├── fork_issues/                    # Fork issue metadata
+├── dosu_responses/                 # Individual Dosu responses
+└── comparisons/                    # Individual comparisons
+    ├── comparison_1.json
+    └── ...
+```
+
+**Manual Evaluation:**
+After automated collection, manually evaluate each comparison:
+- Accuracy (1-5): How well does Dosu's response match actual resolution?
+- Relevance (1-5): Does it address the core issue?
+- Helpfulness (1-5): Would it guide user to solution?
+- Code Context: Does it reference relevant OpenMC code?
+- Hallucination: Any incorrect information?
+
+**Notes on Iterative Testing:**
+- Dosu lacks API for knowledge base reset
+- Each validation builds on Dosu's learned knowledge
+- Cannot easily A/B test different prompt configurations
+- Workaround: Use different issue categories for each iteration
+- Or: Test on categories where Dosu underperforms after reviewing initial results
+
+**Integration with Dosu:**
+1. Install Dosu via GitHub Marketplace on your fork
+2. Configure Dosu settings via web UI
+3. Set "Notes for Dosu" to improve performance
+4. Run this script to create test issues
+5. Dosu automatically responds
+6. Script collects and compares responses
+
 ## Setup
 
 ### 1. Install Dependencies
