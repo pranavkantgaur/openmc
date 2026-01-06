@@ -388,9 +388,6 @@ class DosuForkValidator:
                 # Use original title without test prefix (also sanitize)
                 new_title = self.sanitize_github_mentions(upstream_issue.title)
                 
-                # Get labels (create if needed)
-                labels_to_add = [category]
-                
                 if dry_run:
                     print(f"  DRY RUN: Would create issue: {new_title[:60]}")
                     created_issues.append({
@@ -402,11 +399,10 @@ class DosuForkValidator:
                     })
                 else:
                     try:
-                        # Create issue
+                        # Create issue without labels
                         new_issue = fork_repo.create_issue(
                             title=new_title,
-                            body=new_body,
-                            labels=labels_to_add
+                            body=new_body
                         )
                         
                         print(f"  ✓ Created #{new_issue.number}: {new_title[:60]}")
