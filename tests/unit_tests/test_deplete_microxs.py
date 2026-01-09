@@ -149,13 +149,18 @@ def simple_model():
 
 
 def test_get_microxs_with_init_lib(run_in_tmpdir, simple_model):
-    """Test that get_microxs_and_flux works correctly when Model.init_lib() has been called.
+    """Test that get_microxs_and_flux works correctly when Model.init_lib()
+    has been called.
     
-    This specifically tests the fix for issue #2172 where summary.h5 and statepoint files
-    were written to different locations when using init_lib before get_microxs_and_flux.
+    This specifically tests the fix for issue #2172 where summary.h5 and
+    statepoint files were written to different locations when using init_lib
+    before get_microxs_and_flux.
     """
     # Skip if openmc lib is not available
-    pytest.importorskip('openmc.lib._dll')
+    try:
+        import openmc.lib
+    except (ImportError, OSError):
+        pytest.skip("OpenMC library not available")
     
     model = simple_model
     

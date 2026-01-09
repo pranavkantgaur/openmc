@@ -163,7 +163,7 @@ def get_microxs_and_flux(
 
     with TemporaryDirectory() as temp_dir:
         # Save original output path settings
-        original_output = model.settings.output.copy() if model.settings.output else {}
+        original_output = dict(model.settings.output) if model.settings.output else {}
 
         if openmc.lib.is_initialized:
             openmc.lib.finalize()
