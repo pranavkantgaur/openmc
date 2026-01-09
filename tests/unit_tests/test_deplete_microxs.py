@@ -8,10 +8,12 @@ from os import remove
 from pathlib import Path
 
 import pytest
-from openmc.deplete import MicroXS
+from openmc.deplete import MicroXS, get_microxs_and_flux
+import openmc
 import numpy as np
 
 ONE_GROUP_XS = Path(__file__).parents[1] / "micro_xs_simple.csv"
+CHAIN_FILE = Path(__file__).parents[1] / 'chain_simple.xml'
 
 
 def test_from_array():
@@ -124,3 +126,61 @@ def test_microxs_zero_flux():
 
     # All microscopic cross sections should be zero
     assert np.all(microxs.data == 0.0)
+
+
+@pytest.fixture
+def simple_model():
+    """Create a simple model for testing"""
+    fuel = openmc.Material(name="uo2")
+    fuel.add_nuclide("U235", 1.0)
+    fuel.add_nuclide("O16", 2.0)
+    fuel.set_density("g/cc", 10.4)
+
+    sphere = openmc.Sphere(r=10.0, boundary_type='vacuum')
+    cell = openmc.Cell(region=-sphere, fill=fuel)
+    geometry = openmc.Geometry([cell])
+
+    settings = openmc.Settings()
+    settings.particles = 100
+    settings.inactive = 2
+    settings.batches = 5
+
+    return openmc.Model(geometry, settings=settings)
+
+
+def test_get_microxs_with_init_lib(run_in_tmpdir, simple_model):
+    """Test that get_microxs_and_flux works correctly when Model.init_lib() has been called.
+    
+    This specifically tests the fix for issue #2172 where summary.h5 and statepoint files
+    were written to different locations when using init_lib before get_microxs_and_flux.
+    """
+    # Skip if openmc lib is not available
+    pytest.importorskip('openmc.lib._dll')
+    
+    model = simple_model
+    
+    # Initialize the lib (this would normally be done by the user for MPI setup)
+    try:
+        model.init_lib()
+        
+        # Get materials and set up parameters for get_microxs_and_flux
+        domains = list(model.geometry.get_all_materials().values())
+        nuclides = ['U235', 'O16']
+        
+        # This should work without raising a "summary.h5 not found" error
+        fluxes, micros = get_microxs_and_flux(
+            model, 
+            domains, 
+            nuclides,
+            chain_file=CHAIN_FILE,
+            reaction_rate_mode='direct'
+        )
+        
+        # Verify we got results
+        assert len(fluxes) == len(domains)
+        assert len(micros) == len(domains)
+        assert isinstance(micros[0], MicroXS)
+        
+    finally:
+        # Clean up
+        model.finalize_lib()
