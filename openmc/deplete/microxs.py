@@ -161,18 +161,26 @@ def get_microxs_and_flux(
         rr_tally.scores = reactions
         model.tallies.append(rr_tally)
 
-    if openmc.lib.is_initialized:
-        openmc.lib.finalize()
-
-        if comm.rank == 0:
-            model.export_to_model_xml()
-        comm.barrier()
-        # Reinitialize with tallies
-        openmc.lib.init(intracomm=comm)
-
     with TemporaryDirectory() as temp_dir:
+        # Save original output path settings
+        original_output = model.settings.output.copy() if model.settings.output else {}
+
+        if openmc.lib.is_initialized:
+            openmc.lib.finalize()
+
+            # Set output path to temp directory to ensure summary.h5 and statepoint
+            # are written to the same location
+            if comm.rank == 0:
+                if model.settings.output is None:
+                    model.settings.output = {}
+                model.settings.output['path'] = temp_dir
+                model.export_to_model_xml()
+            comm.barrier()
+            # Reinitialize with tallies
+            openmc.lib.init(intracomm=comm)
+
         # Indicate to run in temporary directory unless being executed through
-        # openmc.lib, in which case we don't need to specify the cwd
+        # openmc.lib, in which case the output path was already set above
         run_kwargs = dict(run_kwargs) if run_kwargs else {}
         if not openmc.lib.is_initialized:
             run_kwargs.setdefault('cwd', temp_dir)
@@ -190,6 +198,9 @@ def get_microxs_and_flux(
             # Export the model to path_input if provided
             if path_input is not None:
                 model.export_to_model_xml(path_input)
+
+            # Restore original output path settings
+            model.settings.output = original_output
 
         # Broadcast updated statepoint path to all ranks
         statepoint_path = comm.bcast(statepoint_path)
