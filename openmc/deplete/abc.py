@@ -843,101 +843,71 @@ class Integrator(ABC):
             if Delta_N < -N_current:
                 Delta_N = -N_current * 0.99  # Leave a small amount
             
-            # Extract derivative value from tally results
-            # Derivative tally results format depends on the tally structure
-            # Typical shape: (n_filter_bins, n_scores, 3) where last dim is [sum, sum_sq, N]
-            # or: (n_filter_bins, n_nuclides, n_scores, 3) for tallies with nuclide bins
-            tally_results = deriv_data['results']
+            # Extract derivative values from the score dictionary
+            # deriv_data is now a dictionary mapping score names to derivative values
+            # e.g., {'fission': 1.23e-10, 'absorption': 2.45e-10}
             
-            # Check if results are available
-            if tally_results.size == 0:
-                continue
+            if debug:
+                print(f"  Available scores in derivative: {list(deriv_data.keys())}")
+                print(f"  Destruction rate: {destruction_rate:.6e}")
+                print(f"  Delta_N: {Delta_N:.6e}")
             
-            # Handle different result array shapes
-            # The last dimension is always [sum, sum_sq, N]
-            if tally_results.ndim == 3:
-                # Shape: (filters, scores, 3)
-                sums = tally_results[:, :, 0]
-                counts = tally_results[:, :, 2]
-            elif tally_results.ndim == 4:
-                # Shape: (filters, nuclides, scores, 3)
-                sums = tally_results[:, :, :, 0]
-                counts = tally_results[:, :, :, 2]
-            else:
-                # Unexpected shape, skip
-                continue
-            
-            # Avoid division by zero
-            nonzero = counts > 0
-            means = np.zeros_like(sums)
-            means[nonzero] = sums[nonzero] / counts[nonzero]
-            
-            # Average over filters and nuclides (if tally has multiple)
-            # Take average of all scores
-            if means.size > 0:
-                # dR/dN is the average derivative value
-                # Units: [reaction rate change per atom] / [atoms/b-cm]
-                # = [(reactions/sec/source_particle)/(atoms/b-cm)]
-                dR_dN = np.mean(means)
-                
+            # Apply correction to each reaction in the derivative scores
+            for score, dR_dN in deriv_data.items():
                 if debug:
-                    print(f"  dR/dN from tally: {dR_dN:.6e}")
-                    print(f"  Destruction rate: {destruction_rate:.6e}")
-                    print(f"  Delta_N: {Delta_N:.6e}")
+                    print(f"  Score {score}: dR/dN from tally = {dR_dN:.6e}")
                 
-                # Apply correction to each reaction in the tally scores
-                for score in deriv_data['scores']:
-                    if score in rates.index_rx:
-                        rxn_idx = rates.index_rx[score]
-                        
-                        # First-order correction for logarithmic derivatives:
-                        # 
-                        # OpenMC derivative tallies compute LOGARITHMIC derivatives:
-                        #   d(log c)/dN = (1/c) * (dc/dN)
-                        # where c is the collision rate and N is nuclide density [atoms/b-cm].
-                        #
-                        # To apply this to reaction rates:
-                        # 1. Get current reaction rate: R [reactions/sec/atom]
-                        # 2. Convert to total rate: R_total = R * N_current [reactions/sec]
-                        # 3. Get logarithmic derivative from tally: d(log R)/dN
-                        # 4. Convert to absolute derivative: dR_total/dN = R_total * d(log R)/dN
-                        # 5. Estimate density change: ΔN [atoms]
-                        # 6. Estimate total rate change: ΔR_total = (dR_total/dN) * ΔN
-                        # 7. Convert back to per-atom rate change: ΔR = ΔR_total / N_current
-                        #
-                        # Simplifying: ΔR = R_total * d(log R)/dN * ΔN / N_current
-                        #              ΔR = R * N_current * d(log R)/dN * ΔN / N_current
-                        #              ΔR = R * d(log R)/dN * ΔN
-                        #
-                        # So the correction is simply: R_new = R * (1 + d(log R)/dN * ΔN)
-                        
-                        current_rate = corrected_rates[mat_idx, nuc_idx, rxn_idx]
-                        
-                        # Logarithmic derivative correction
-                        # dR/dN is from the tally (logarithmic derivative)
-                        # ΔN is the predicted change in atom count
-                        fractional_correction = dR_dN * Delta_N
-                        correction = current_rate * fractional_correction
-                        
-                        if debug:
-                            print(f"  Score {score}: original rate = {corrected_rates[mat_idx, nuc_idx, rxn_idx]:.6e}")
-                            print(f"  Correction = {correction:.6e}")
-                        
-                        # Apply correction with safety limit (don't change by more than 50%)
-                        max_change = abs(corrected_rates[mat_idx, nuc_idx, rxn_idx]) * 0.5
-                        correction = np.clip(correction, -max_change, max_change)
-                        
-                        if debug:
-                            print(f"  Clipped correction = {correction:.6e}")
-                        
-                        corrected_rates[mat_idx, nuc_idx, rxn_idx] += correction
-                        
-                        # Ensure rate doesn't go negative
-                        if corrected_rates[mat_idx, nuc_idx, rxn_idx] < 0:
-                            corrected_rates[mat_idx, nuc_idx, rxn_idx] = 0.0
-                        
-                        if debug:
-                            print(f"  Final rate = {corrected_rates[mat_idx, nuc_idx, rxn_idx]:.6e}")
+                if score in rates.index_rx:
+                    rxn_idx = rates.index_rx[score]
+                    
+                    # First-order correction for logarithmic derivatives:
+                    # 
+                    # OpenMC derivative tallies compute LOGARITHMIC derivatives:
+                    #   d(log c)/dN = (1/c) * (dc/dN)
+                    # where c is the collision rate and N is nuclide density [atoms/b-cm].
+                    #
+                    # To apply this to reaction rates:
+                    # 1. Get current reaction rate: R [reactions/sec/atom]
+                    # 2. Convert to total rate: R_total = R * N_current [reactions/sec]
+                    # 3. Get logarithmic derivative from tally: d(log R)/dN
+                    # 4. Convert to absolute derivative: dR_total/dN = R_total * d(log R)/dN
+                    # 5. Estimate density change: ΔN [atoms]
+                    # 6. Estimate total rate change: ΔR_total = (dR_total/dN) * ΔN
+                    # 7. Convert back to per-atom rate change: ΔR = ΔR_total / N_current
+                    #
+                    # Simplifying: ΔR = R_total * d(log R)/dN * ΔN / N_current
+                    #              ΔR = R * N_current * d(log R)/dN * ΔN / N_current
+                    #              ΔR = R * d(log R)/dN * ΔN
+                    #
+                    # So the correction is simply: R_new = R * (1 + d(log R)/dN * ΔN)
+                    
+                    current_rate = corrected_rates[mat_idx, nuc_idx, rxn_idx]
+                    
+                    # Logarithmic derivative correction
+                    # dR/dN is from the tally (logarithmic derivative)
+                    # ΔN is the predicted change in atom count
+                    fractional_correction = dR_dN * Delta_N
+                    correction = current_rate * fractional_correction
+                    
+                    if debug:
+                        print(f"    Original rate = {current_rate:.6e}")
+                        print(f"    Correction = {correction:.6e}")
+                    
+                    # Apply correction with safety limit (don't change by more than 50%)
+                    max_change = abs(current_rate) * 0.5
+                    correction = np.clip(correction, -max_change, max_change)
+                    
+                    if debug:
+                        print(f"    Clipped correction = {correction:.6e}")
+                    
+                    corrected_rates[mat_idx, nuc_idx, rxn_idx] += correction
+                    
+                    # Ensure rate doesn't go negative
+                    if corrected_rates[mat_idx, nuc_idx, rxn_idx] < 0:
+                        corrected_rates[mat_idx, nuc_idx, rxn_idx] = 0.0
+                    
+                    if debug:
+                        print(f"    Final rate = {corrected_rates[mat_idx, nuc_idx, rxn_idx]:.6e}")
         
         return corrected_rates
 

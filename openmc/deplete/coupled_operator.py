@@ -441,6 +441,20 @@ class CoupledOperator(OpenMCOperator):
             rates.fill(0.0)
             return OperatorResult(ufloat(0.0, 0.0), rates, None)
 
+        # CRITICAL: Activate derivative tallies before running simulation
+        # Tallies default to active_=false in C++ and only get activated after first active batch,
+        # but derivative scoring (score_track_derivative) requires them to be active
+        # from the start to accumulate flux derivatives during particle tracking.
+        if self.model.tallies:
+            for tally in self.model.tallies:
+                if tally.derivative is not None:
+                    try:
+                        tally_lib = openmc.lib.tallies[tally.id]
+                        tally_lib.active = True
+                    except KeyError:
+                        # Tally not yet in C API, will be activated when loaded
+                        pass
+        
         # Run OpenMC
         openmc.lib.run()
 
@@ -529,6 +543,7 @@ class CoupledOperator(OpenMCOperator):
                 continue
             
             # Get the material and nuclide for this derivative
+            # Convert material ID to string to match burnable_mats format
             mat_id = str(deriv.material)
             nuclide = deriv.nuclide
             
@@ -542,14 +557,33 @@ class CoupledOperator(OpenMCOperator):
                 # where the last dimension is [sum, sum_sq, N]
                 results = tally_lib.results
                 
-                # Store the mean values (sum / N) for this derivative
-                # For now, we store the full results array
-                # The integrator will need to process this appropriately
-                derivatives[(mat_id, nuclide)] = {
-                    'tally_id': tally.id,
-                    'results': results,
-                    'scores': tally.scores
-                }
+                # Debug: print results shape and values
+                print(f"DEBUG: Tally {tally.id} ({tally.name})")
+                print(f"  Results shape: {results.shape}")
+                print(f"  Results sum: {results[..., 0].sum()}")
+                print(f"  n_realizations: {results[..., 2].max()}")
+                print(f"  Scores: {tally.scores}")
+                print(f"  Nuclides: {tally.nuclides}")
+                
+                # Compute mean for each score
+                # results has shape (..., 3) where last dimension is [sum, sum_sq, n_realizations]
+                n_realizations = results[..., 2]
+                means = np.where(n_realizations > 0, results[..., 0] / n_realizations, 0.0)
+                
+                # Store the mean derivative values indexed by score
+                score_dict = {}
+                for i, score in enumerate(tally.scores):
+                    # Extract the mean value for this score
+                    # The means array may have multiple dimensions based on filters
+                    # For a simple material+nuclide filter, it's typically 1D or 2D
+                    score_mean = means[..., i] if means.ndim > 1 else means[i]
+                    
+                    # Sum over all filter bins to get total derivative for this score
+                    total_mean = float(np.sum(score_mean))
+                    print(f"  Score '{score}' total mean: {total_mean}")
+                    score_dict[score] = total_mean
+                
+                derivatives[(mat_id, nuclide)] = score_dict
                 
             except (KeyError, AttributeError) as e:
                 # Tally might not be available in C API yet
