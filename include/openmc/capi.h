@@ -179,6 +179,7 @@ int openmc_tally_set_id(int32_t index, int32_t id);
 int openmc_tally_set_nuclides(int32_t index, int n, const char** nuclides);
 int openmc_tally_set_scores(int32_t index, int n, const char** scores);
 int openmc_tally_set_type(int32_t index, const char* type);
+void openmc_tallies_setup_active();
 int openmc_tally_set_writable(int32_t index, bool writable);
 int openmc_get_weight_windows_index(int32_t id, int32_t* idx);
 int openmc_weight_windows_get_id(int32_t index, int32_t* id);

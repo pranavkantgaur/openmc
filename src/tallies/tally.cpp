@@ -1364,6 +1364,12 @@ extern "C" int openmc_tally_set_active(int32_t index, bool active)
   return 0;
 }
 
+extern "C" void openmc_tallies_setup_active()
+{
+  // Rebuild the active tallies list after changing tally active flags
+  setup_active_tallies();
+}
+
 extern "C" int openmc_tally_get_writable(int32_t index, bool* writable)
 {
   if (index < 0 || index >= model::tallies.size()) {

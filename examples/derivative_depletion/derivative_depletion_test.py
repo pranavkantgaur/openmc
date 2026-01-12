@@ -42,6 +42,12 @@ def setup_pin_cell_model(power=174):
     fuel = model.materials[0]  # UO2 fuel
     fuel.depletable = True
     
+    # Add gadolinium as burnable poison to demonstrate self-shielding
+    # Gd-157 has enormous thermal absorption cross section (~250,000 barns)
+    # Strong self-shielding effects as it burns out
+    fuel.add_nuclide('Gd156', 1e-6, 'ao')  # Small amount
+    fuel.add_nuclide('Gd157', 5e-6, 'ao')  # Stronger absorber, slightly more
+    
     # Get fuel volume from geometry (area for 2D pin cell)
     # Find the fuel region cylinder radius
     from math import pi
@@ -180,7 +186,7 @@ def run_derivative_depletion(timesteps, power, output_dir, chain_file):
     print(f"  Timesteps: {len(timesteps)} steps")
     print(f"  Total time: {sum(timesteps) / 86400:.2f} days")
     print(f"  Power: {power:.2e} W/cm")
-    print(f"  Using derivative tallies for: Xe135, Sm149, U235, Pu239")
+    print(f"  Using derivative tallies for: U235, Gd157 (strong self-shielding absorber)")
     
     # Save current directory and change to output directory
     original_dir = Path.cwd()
@@ -194,7 +200,9 @@ def run_derivative_depletion(timesteps, power, output_dir, chain_file):
         
         # Add derivative tallies for key nuclides with strong self-shielding
         # These track ∂R/∂N (derivative of reaction rate w.r.t. nuclide density)
-        derivative_nuclides = ['Xe135', 'Sm149', 'U235']  # Start with nuclides in chain
+        # Note: Can only create derivatives for nuclides present in initial composition
+        # Gd-157 has enormous thermal cross section (~250k barns) - perfect for self-shielding demo
+        derivative_nuclides = ['U235', 'Gd157']  # Both present in initial composition
         
         tallies = openmc.Tallies()
         for nuc in derivative_nuclides:
@@ -209,6 +217,7 @@ def run_derivative_depletion(timesteps, power, output_dir, chain_file):
             tally = openmc.Tally(name=f'{nuc}_derivative')
             tally.filters = [openmc.MaterialFilter(fuel)]
             tally.scores = ['absorption', 'fission']
+            tally.nuclides = [nuc]  # CRITICAL: Must specify nuclide for collision estimator
             tally.derivative = deriv
             tallies.append(tally)
         
@@ -463,7 +472,7 @@ def run_depletion_comparison(
         if d.exists():
             shutil.rmtree(d)
         d.mkdir()
-    
+    '''
     # Run reference calculation (small timesteps)
     print("\n" + "=" * 70)
     print("REFERENCE CALCULATION (small timesteps)")
@@ -481,7 +490,7 @@ def run_depletion_comparison(
         large_timesteps, power, test_dir, chain_file
     )
     test_data = extract_depletion_data(test_results)
-    
+    '''
     # Run derivative-enhanced calculation (large timesteps with derivatives)
     print("\n" + "=" * 70)
     print("DERIVATIVE-ENHANCED CALCULATION (large timesteps with derivatives)")

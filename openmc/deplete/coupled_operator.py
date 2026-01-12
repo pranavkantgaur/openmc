@@ -379,6 +379,26 @@ class CoupledOperator(OpenMCOperator):
         if not openmc.lib.is_initialized:
             openmc.lib.init(intracomm=comm)
 
+        # CRITICAL: Activate derivative tallies immediately after library init
+        # Tallies default to active_=false in C++ and only get activated after first active batch,
+        # but derivative scoring (score_track_derivative) requires them to be active
+        # from the start to accumulate flux derivatives during particle tracking.
+        if self.model.tallies:
+            for tally in self.model.tallies:
+                if tally.derivative is not None:
+                    try:
+                        tally_lib = openmc.lib.tallies[tally.id]
+                        print(f"DEBUG: Activating derivative tally {tally.id} for {tally.derivative.nuclide} (before: {tally_lib.active})")
+                        tally_lib.active = True
+                        print(f"DEBUG: Activated derivative tally {tally.id} (after: {tally_lib.active})")
+                    except KeyError:
+                        print(f"DEBUG: Tally {tally.id} not found in C API during initial_condition")
+                        pass
+            # CRITICAL: Rebuild active tallies list after setting active flags
+            # Just setting active=True doesn't update model::active_tallies vector
+            openmc.lib.setup_active_tallies()
+            print(f"DEBUG: Rebuilt active tallies list")
+
         # Generate tallies in memory
         materials = [openmc.lib.materials[int(i)] for i in self.burnable_mats]
 
@@ -450,10 +470,16 @@ class CoupledOperator(OpenMCOperator):
                 if tally.derivative is not None:
                     try:
                         tally_lib = openmc.lib.tallies[tally.id]
+                        print(f"DEBUG: Activating derivative tally {tally.id} (before: {tally_lib.active})")
                         tally_lib.active = True
+                        print(f"DEBUG: Activated derivative tally {tally.id} (after: {tally_lib.active})")
                     except KeyError:
                         # Tally not yet in C API, will be activated when loaded
+                        print(f"DEBUG: Tally {tally.id} not yet in C API, skipping activation")
                         pass
+            # CRITICAL: Rebuild active tallies list after setting active flags
+            openmc.lib.setup_active_tallies()
+            print(f"DEBUG: Rebuilt active tallies list")
         
         # Run OpenMC
         openmc.lib.run()

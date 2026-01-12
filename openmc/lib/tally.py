@@ -14,7 +14,8 @@ from .error import _error_handler
 from .filter import _get_filter
 
 
-__all__ = ['Tally', 'tallies', 'global_tallies', 'num_realizations']
+__all__ = ['Tally', 'tallies', 'global_tallies', 'num_realizations', 
+           'reset_tallies', 'setup_active_tallies']
 
 # Tally functions
 _dll.openmc_extend_tallies.argtypes = [c_int32, POINTER(c_int32), POINTER(c_int32)]
@@ -69,6 +70,8 @@ _dll.openmc_tally_results.errcheck = _error_handler
 _dll.openmc_tally_set_active.argtypes = [c_int32, c_bool]
 _dll.openmc_tally_set_active.restype = c_int
 _dll.openmc_tally_set_active.errcheck = _error_handler
+_dll.openmc_tallies_setup_active.argtypes = []
+_dll.openmc_tallies_setup_active.restype = None
 _dll.openmc_tally_set_filters.argtypes = [c_int32, c_size_t, POINTER(c_int32)]
 _dll.openmc_tally_set_filters.restype = c_int
 _dll.openmc_tally_set_filters.errcheck = _error_handler
@@ -459,3 +462,18 @@ class _TallyMapping(Mapping):
         _dll.openmc_remove_tally(self[key]._index)
 
 tallies = _TallyMapping()
+
+
+def reset_tallies():
+    """Reset tallies."""
+    _dll.openmc_reset_tallies()
+
+
+def setup_active_tallies():
+    """Rebuild the list of active tallies after changing tally active flags.
+    
+    This must be called after setting tally.active = True/False to ensure
+    the internal active_tallies list is updated for derivative scoring.
+    """
+    _dll.openmc_tallies_setup_active()
+
