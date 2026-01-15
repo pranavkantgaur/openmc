@@ -7,6 +7,7 @@
 
 # Compiler python objects
 *.pyc
+__pycache__/
 
 # Python distribution
 .settings/

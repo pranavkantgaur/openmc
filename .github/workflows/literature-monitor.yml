@@ -1,0 +1,93 @@
+name: Literature Knowledge Base Monitor
+
+on:
+  # Run weekly on Monday at 9:00 UTC
+  schedule:
+    - cron: '0 9 * * 1'
+  
+  # Allow manual triggers
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (no issues created)'
+        required: false
+        type: boolean
+        default: false
+      min_score:
+        description: 'Minimum relevance score (0.0-1.0)'
+        required: false
+        type: string
+        default: '0.6'
+      max_issues:
+        description: 'Maximum issues to create'
+        required: false
+        type: string
+        default: '5'
+
+jobs:
+  scan-literature:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      issues: write
+      contents: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+      
+      - name: Run literature scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          cd tools/knowledge_base
+          
+          # Build command with optional arguments
+          CMD="python run_literature_scan.py"
+          
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            CMD="$CMD --dry-run"
+          fi
+          
+          if [[ -n "${{ github.event.inputs.min_score }}" ]]; then
+            CMD="$CMD --min-score ${{ github.event.inputs.min_score }}"
+          fi
+          
+          if [[ -n "${{ github.event.inputs.max_issues }}" ]]; then
+            CMD="$CMD --max-issues ${{ github.event.inputs.max_issues }}"
+          fi
+          
+          echo "Running: $CMD"
+          $CMD
+      
+      - name: Commit database updates
+        if: success()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          if [[ -f tools/knowledge_base/papers_database.json ]]; then
+            git add tools/knowledge_base/papers_database.json
+            
+            if ! git diff --cached --quiet; then
+              git commit -m "Update literature knowledge base [automated]"
+              git push
+            else
+              echo "No database changes to commit"
+            fi
+          else
+            echo "Database file not found, skipping commit"
+          fi

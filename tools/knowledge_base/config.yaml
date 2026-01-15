@@ -1,0 +1,64 @@
+# Configuration for OpenMC Literature Knowledge Base Service
+# This service monitors academic literature for potential OpenMC acceleration ideas
+
+# Search keywords for filtering relevant papers
+search_keywords:
+  primary:
+    - "Monte Carlo particle transport"
+    - "neutron transport simulation"
+    - "OpenMC"
+    - "nuclear reactor simulation"
+  
+  acceleration_techniques:
+    - "variance reduction"
+    - "parallel Monte Carlo"
+    - "GPU acceleration"
+    - "mesh refinement"
+    - "hybrid method"
+    - "weight window"
+    - "importance sampling"
+    - "domain decomposition"
+    - "multiphysics coupling"
+    - "CMFD acceleration"
+    - "fission matrix"
+    - "adjoint Monte Carlo"
+  
+  multiphysics:
+    - "thermal hydraulics coupling"
+    - "depletion burnup"
+    - "multiphysics simulation"
+    - "MOOSE coupling"
+    - "T-H feedback"
+
+# Sources to monitor
+data_sources:
+  arxiv:
+    enabled: true
+    categories:
+      - "nucl-th"  # Nuclear Theory
+      - "physics.comp-ph"  # Computational Physics
+    max_results: 50
+  
+  # Add other sources as needed (requires API keys)
+  # google_scholar:
+  #   enabled: false
+  #   api_key_env: "GOOGLE_SCHOLAR_API_KEY"
+
+# GitHub configuration
+github:
+  issue_label: "literature-enhancement"
+  issue_template: "literature_feature_request"
+  
+# Database configuration
+database:
+  path: "tools/knowledge_base/papers_database.json"
+  
+# Filtering criteria
+filters:
+  min_relevance_score: 0.6
+  exclude_older_than_days: 365  # Only look at papers from last year
+  
+# Schedule (for GitHub Actions)
+schedule:
+  frequency: "weekly"  # weekly, monthly
+  day_of_week: "monday"  # For weekly runs
