@@ -752,6 +752,78 @@ void calc_zn_rad(int n, double rho, double zn_rad[])
   }
 }
 
+void calc_bernstein_basis(int n, double t, double bn[])
+{
+  // Calculate Bernstein basis polynomials of degree n at parameter t
+  // B_{i,n}(t) = C(n,i) * t^i * (1-t)^(n-i)
+  
+  // Handle edge cases
+  if (t < 0.0) t = 0.0;
+  if (t > 1.0) t = 1.0;
+  
+  double one_minus_t = 1.0 - t;
+  
+  // Calculate using recursive formula to avoid computing binomial coefficients
+  // and powers separately. Uses the recurrence:
+  // B_{i,n}(t) = (1-t) * B_{i,n-1}(t) + t * B_{i-1,n-1}(t)
+  
+  // Initialize for degree 0
+  bn[0] = 1.0;
+  
+  if (n == 0) return;
+  
+  // Build up using Pascal's triangle-like structure
+  // We compute iteratively for each degree from 1 to n
+  vector<double> prev(n + 1, 0.0);
+  prev[0] = 1.0;
+  
+  for (int deg = 1; deg <= n; deg++) {
+    vector<double> curr(deg + 1, 0.0);
+    
+    // First basis function: (1-t)^deg
+    curr[0] = prev[0] * one_minus_t;
+    
+    // Middle basis functions
+    for (int i = 1; i < deg; i++) {
+      curr[i] = prev[i] * one_minus_t + prev[i - 1] * t;
+    }
+    
+    // Last basis function: t^deg
+    curr[deg] = prev[deg - 1] * t;
+    
+    // Copy current to previous for next iteration
+    for (int i = 0; i <= deg; i++) {
+      prev[i] = curr[i];
+    }
+  }
+  
+  // Copy final result
+  for (int i = 0; i <= n; i++) {
+    bn[i] = prev[i];
+  }
+}
+
+void calc_bernstein_basis_2d(int n_u, int n_v, double u, double v, double bn2d[])
+{
+  // Calculate 2D Bernstein basis as tensor product of 1D bases
+  
+  // Allocate temporary storage for 1D bases
+  vector<double> bu(n_u + 1);
+  vector<double> bv(n_v + 1);
+  
+  // Calculate 1D bases
+  calc_bernstein_basis(n_u, u, bu.data());
+  calc_bernstein_basis(n_v, v, bv.data());
+  
+  // Compute tensor product: B_{i,n_u}(u) * B_{j,n_v}(v)
+  int idx = 0;
+  for (int i = 0; i <= n_u; i++) {
+    for (int j = 0; j <= n_v; j++) {
+      bn2d[idx++] = bu[i] * bv[j];
+    }
+  }
+}
+
 void rotate_angle_c(double uvw[3], double mu, const double* phi, uint64_t* seed)
 {
   Direction u = rotate_angle({uvw}, mu, phi, seed);

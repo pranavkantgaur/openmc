@@ -18,6 +18,8 @@ namespace openmc {
 
 enum class FilterType {
   AZIMUTHAL,
+  BEZIER,
+  BEZIER_1D,
   CELLBORN,
   CELLFROM,
   CELL,

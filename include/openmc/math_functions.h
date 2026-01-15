@@ -117,6 +117,42 @@ extern "C" void calc_zn(int n, double rho, double phi, double zn[]);
 extern "C" void calc_zn_rad(int n, double rho, double zn_rad[]);
 
 //==============================================================================
+//! Calculate the n-th order Bernstein polynomial basis functions (used in
+//! Bezier expansion tallies) at a given parameter value t in [0,1].
+//!
+//! The Bernstein basis polynomials of degree n are defined as:
+//! B_{i,n}(t) = C(n,i) * t^i * (1-t)^(n-i)
+//! where C(n,i) is the binomial coefficient "n choose i"
+//!
+//! These polynomials form the basis for Bezier curves and can be used for
+//! functional expansion tallies in spatial domains.
+//!
+//! \param n   The degree of the Bernstein polynomials
+//! \param t   The parameter value in [0,1] at which to evaluate
+//! \param bn  The requested Bernstein basis polynomials of degree 0 to n
+//!   evaluated at t. Array must be allocated to size (n+1).
+//==============================================================================
+
+extern "C" void calc_bernstein_basis(int n, double t, double bn[]);
+
+//==============================================================================
+//! Calculate 2D tensor product Bernstein basis for Bezier surface expansion.
+//!
+//! This computes the tensor product of 1D Bernstein bases for use in 2D
+//! rectangular domains: B_{i,n}(u) * B_{j,m}(v)
+//!
+//! \param n_u  Degree in u direction
+//! \param n_v  Degree in v direction
+//! \param u    Parameter in [0,1] for u direction
+//! \param v    Parameter in [0,1] for v direction
+//! \param bn2d The 2D Bernstein basis values, stored as
+//!   [(i,j) for i in 0..n_u for j in 0..n_v]
+//==============================================================================
+
+extern "C" void calc_bernstein_basis_2d(
+  int n_u, int n_v, double u, double v, double bn2d[]);
+
+//==============================================================================
 //! Rotate the direction cosines through a polar angle whose cosine is mu and
 //! through an azimuthal angle sampled uniformly.
 //!
