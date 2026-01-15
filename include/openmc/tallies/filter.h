@@ -18,6 +18,8 @@ namespace openmc {
 
 enum class FilterType {
   AZIMUTHAL,
+  BEZIER,
+  BEZIER_1D,
   CELLBORN,
   CELLFROM,
   CELL,
@@ -28,6 +30,7 @@ enum class FilterType {
   ENERGY_FUNCTION,
   ENERGY,
   ENERGY_OUT,
+  GENERIC_BASIS,
   LEGENDRE,
   MATERIAL,
   MATERIALFROM,
@@ -40,6 +43,7 @@ enum class FilterType {
   PARENT_NUCLIDE,
   PARTICLE,
   POLAR,
+  POLYNOMIAL_BASIS,
   SPHERICAL_HARMONICS,
   SPATIAL_LEGENDRE,
   SURFACE,

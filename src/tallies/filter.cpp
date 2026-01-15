@@ -11,6 +11,7 @@
 #include "openmc/constants.h" // for MAX_LINE_LEN;
 #include "openmc/error.h"
 #include "openmc/tallies/filter_azimuthal.h"
+#include "openmc/tallies/filter_bezier.h"
 #include "openmc/tallies/filter_cell.h"
 #include "openmc/tallies/filter_cell_instance.h"
 #include "openmc/tallies/filter_cellborn.h"
@@ -20,6 +21,7 @@
 #include "openmc/tallies/filter_distribcell.h"
 #include "openmc/tallies/filter_energy.h"
 #include "openmc/tallies/filter_energyfunc.h"
+#include "openmc/tallies/filter_generic_basis.h"
 #include "openmc/tallies/filter_legendre.h"
 #include "openmc/tallies/filter_material.h"
 #include "openmc/tallies/filter_materialfrom.h"
@@ -104,6 +106,10 @@ Filter* Filter::create(const std::string& type, int32_t id)
 {
   if (type == "azimuthal") {
     return Filter::create<AzimuthalFilter>(id);
+  } else if (type == "bezier") {
+    return Filter::create<BezierFilter>(id);
+  } else if (type == "bezier1d") {
+    return Filter::create<Bezier1DFilter>(id);
   } else if (type == "cell") {
     return Filter::create<CellFilter>(id);
   } else if (type == "cellborn") {
@@ -124,6 +130,8 @@ Filter* Filter::create(const std::string& type, int32_t id)
     return Filter::create<CollisionFilter>(id);
   } else if (type == "energyout") {
     return Filter::create<EnergyoutFilter>(id);
+  } else if (type == "genericbasis") {
+    return Filter::create<GenericBasisFilter>(id);
   } else if (type == "legendre") {
     return Filter::create<LegendreFilter>(id);
   } else if (type == "material") {
@@ -148,6 +156,8 @@ Filter* Filter::create(const std::string& type, int32_t id)
     return Filter::create<ParticleFilter>(id);
   } else if (type == "polar") {
     return Filter::create<PolarFilter>(id);
+  } else if (type == "polynomialbasis") {
+    return Filter::create<PolynomialBasisFilter>(id);
   } else if (type == "surface") {
     return Filter::create<SurfaceFilter>(id);
   } else if (type == "spatiallegendre") {

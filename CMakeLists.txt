@@ -405,6 +405,7 @@ list(APPEND libopenmc_SOURCES
   src/tallies/derivative.cpp
   src/tallies/filter.cpp
   src/tallies/filter_azimuthal.cpp
+  src/tallies/filter_bezier.cpp
   src/tallies/filter_cell.cpp
   src/tallies/filter_cell_instance.cpp
   src/tallies/filter_cellborn.cpp
@@ -414,6 +415,7 @@ list(APPEND libopenmc_SOURCES
   src/tallies/filter_distribcell.cpp
   src/tallies/filter_energy.cpp
   src/tallies/filter_energyfunc.cpp
+  src/tallies/filter_generic_basis.cpp
   src/tallies/filter_legendre.cpp
   src/tallies/filter_material.cpp
   src/tallies/filter_materialfrom.cpp
