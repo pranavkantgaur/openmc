@@ -153,6 +153,42 @@ extern "C" void calc_bernstein_basis_2d(
   int n_u, int n_v, double u, double v, double bn2d[]);
 
 //==============================================================================
+//! Calculate the n-th order Chebyshev polynomials of the first kind at x.
+//!
+//! Chebyshev polynomials of the first kind T_n(x) are orthogonal on [-1,1]
+//! with weight function w(x) = 1/sqrt(1-x^2).
+//! They satisfy the recurrence relation:
+//! T_0(x) = 1
+//! T_1(x) = x
+//! T_{n+1}(x) = 2x*T_n(x) - T_{n-1}(x)
+//!
+//! \param n   The maximum order requested
+//! \param x   The value to evaluate at; x is expected to be within [-1,1]
+//! \param tn  The requested Chebyshev polynomials of order 0 to n (inclusive)
+//!   evaluated at x.
+//==============================================================================
+
+extern "C" void calc_chebyshev_t(int n, double x, double tn[]);
+
+//==============================================================================
+//! Calculate the n-th order Chebyshev polynomials of the second kind at x.
+//!
+//! Chebyshev polynomials of the second kind U_n(x) are orthogonal on [-1,1]
+//! with weight function w(x) = sqrt(1-x^2).
+//! They satisfy the recurrence relation:
+//! U_0(x) = 1
+//! U_1(x) = 2x
+//! U_{n+1}(x) = 2x*U_n(x) - U_{n-1}(x)
+//!
+//! \param n   The maximum order requested
+//! \param x   The value to evaluate at; x is expected to be within [-1,1]
+//! \param un  The requested Chebyshev polynomials of order 0 to n (inclusive)
+//!   evaluated at x.
+//==============================================================================
+
+extern "C" void calc_chebyshev_u(int n, double x, double un[]);
+
+//==============================================================================
 //! Rotate the direction cosines through a polar angle whose cosine is mu and
 //! through an azimuthal angle sampled uniformly.
 //!

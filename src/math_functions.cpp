@@ -824,6 +824,42 @@ void calc_bernstein_basis_2d(int n_u, int n_v, double u, double v, double bn2d[]
   }
 }
 
+void calc_chebyshev_t(int n, double x, double tn[])
+{
+  // Calculate Chebyshev polynomials of the first kind
+  // T_0(x) = 1
+  // T_1(x) = x
+  // T_{n+1}(x) = 2x*T_n(x) - T_{n-1}(x)
+  
+  tn[0] = 1.0;
+  if (n >= 1) {
+    tn[1] = x;
+  }
+
+  // Use recursion relation to build higher orders
+  for (int i = 1; i < n; i++) {
+    tn[i + 1] = 2.0 * x * tn[i] - tn[i - 1];
+  }
+}
+
+void calc_chebyshev_u(int n, double x, double un[])
+{
+  // Calculate Chebyshev polynomials of the second kind
+  // U_0(x) = 1
+  // U_1(x) = 2x
+  // U_{n+1}(x) = 2x*U_n(x) - U_{n-1}(x)
+  
+  un[0] = 1.0;
+  if (n >= 1) {
+    un[1] = 2.0 * x;
+  }
+
+  // Use recursion relation to build higher orders
+  for (int i = 1; i < n; i++) {
+    un[i + 1] = 2.0 * x * un[i] - un[i - 1];
+  }
+}
+
 void rotate_angle_c(double uvw[3], double mu, const double* phi, uint64_t* seed)
 {
   Direction u = rotate_angle({uvw}, mu, phi, seed);
