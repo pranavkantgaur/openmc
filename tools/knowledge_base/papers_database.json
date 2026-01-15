@@ -1,18 +1,1 @@
-{
-  "2310.12345": {
-    "arxiv_id": "2310.12345",
-    "title": "Novel Variance Reduction Techniques for OpenMC",
-    "authors": [
-      "Research Team"
-    ],
-    "abstract": "This paper proposes new variance reduction methods...",
-    "published_date": "2023-10-15T00:00:00Z",
-    "categories": [
-      "nucl-th"
-    ],
-    "pdf_url": "https://arxiv.org/pdf/2310.12345.pdf",
-    "relevance_score": 0.0,
-    "keywords_matched": [],
-    "issue_url": null
-  }
-}
+{}
