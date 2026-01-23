@@ -388,16 +388,275 @@ CGAL could enable new OpenMC features:
 3. Gather user feedback on mesh generation pain points
 4. Implement `openmc.mesh_utils` module with CGAL backend
 
+## Addendum: Constrained Delaunay Tetrahedralization in CGAL
+
+### What is Constrained Delaunay Tetrahedralization?
+
+**Constrained Delaunay Tetrahedralization (CDT)** is a mesh generation technique that creates a 3D tetrahedral mesh while respecting **constraints** such as:
+- Prescribed boundary surfaces
+- Internal surfaces/interfaces
+- Sharp features (edges and vertices)
+- Material boundaries
+
+Unlike unconstrained Delaunay, CDT ensures that specific geometric features from the input (e.g., surfaces between different materials) are preserved exactly in the output mesh.
+
+**CGAL Implementation**: CGAL provides `CGAL::Mesh_3` package with advanced 3D mesh generation capabilities including:
+- Constrained Delaunay tetrahedralization
+- Sizing fields for adaptive refinement
+- Quality guarantees (dihedral angles, aspect ratios)
+- Multi-domain meshing with internal boundaries
+
+### Applications for OpenMC
+
+#### 1. **Volume Mesh Generation for libMesh Tallies** (High Value)
+
+**Use Case**: Generate high-quality tetrahedral meshes for unstructured mesh tallies.
+
+**Benefits**:
+- **Quality guarantees**: CDT ensures well-shaped tetrahedra suitable for Monte Carlo tallying
+- **Boundary preservation**: Material interfaces preserved exactly, critical for accurate tallies
+- **Adaptive refinement**: Finer meshes in regions of interest (e.g., high flux gradients)
+- **Multi-material support**: Automatic handling of multiple material regions
+
+**Workflow**:
+```python
+import openmc.mesh_utils
+
+# Define geometry with material boundaries
+geometry = openmc.Geometry(cells)
+
+# Generate tetrahedral mesh with constrained boundaries
+mesh_gen = openmc.mesh_utils.ConstrainedDelaunayMesh()
+mesh_gen.add_domain(geometry, material_boundaries=True)
+mesh_gen.set_sizing_field(refinement_function)  # Adaptive sizing
+mesh_gen.generate()
+mesh_gen.export_exodus('tally_mesh.e')
+
+# Use for tallies
+mesh = openmc.LibMesh('tally_mesh.e')
+mesh_filter = openmc.MeshFilter(mesh)
+tally = openmc.Tally()
+tally.filters = [mesh_filter]
+```
+
+**Specific Value**:
+- **Automatic meshing**: Users specify CSG geometry, CGAL generates mesh automatically
+- **Material-aligned tallies**: Tetrahedra respect material boundaries, enabling accurate per-material scoring
+- **Adaptive resolution**: Refine mesh in high-importance regions (near fuel, control rods)
+
+#### 2. **Hybrid CSG-Mesh Geometry Conversion** (Medium-High Value)
+
+**Use Case**: Convert CSG regions to tetrahedral meshes for hybrid transport methods.
+
+**Benefits**:
+- **Bridge CSG and mesh-based methods**: Enable deterministic-Monte Carlo coupling
+- **Complex geometry handling**: CSG boolean operations → tetrahedral representation
+- **Random ray solver support**: Tetrahedral meshes useful for random ray method
+
+**Example Application**:
+- Convert pin cell CSG geometry to tetrahedra for random ray solver
+- Preserve fuel pellet, cladding, coolant boundaries exactly
+- Generate fine mesh near fuel surface, coarse in coolant
+
+#### 3. **Weight Window Mesh Generation** (Medium Value)
+
+**Use Case**: Generate adaptive meshes for variance reduction.
+
+**Benefits**:
+- **Importance-based refinement**: Finer mesh where particle importance changes rapidly
+- **Boundary alignment**: Respect geometric features important for transport
+- **Optimal mesh sizing**: Balance accuracy vs. memory/computation
+
+**Workflow**:
+```python
+# Generate weight window mesh based on importance map
+ww_mesh = openmc.mesh_utils.AdaptiveWeightWindowMesh()
+ww_mesh.from_importance_map(importance_function)
+ww_mesh.refine_near_boundaries()  # Finer at interfaces
+ww_mesh.export_weight_windows('ww_mesh.h5')
+```
+
+#### 4. **Depletion Mesh Generation** (Medium Value)
+
+**Use Case**: Generate tetrahedral meshes for fine-grained depletion calculations.
+
+**Benefits**:
+- **Spatial resolution**: Capture flux gradients within fuel elements
+- **Material boundaries**: Tetrahedra align with fuel-cladding interface
+- **Burnup tracking**: Per-tetrahedron burnup tracking for detailed analysis
+
+**Example**:
+- Generate tetrahedral mesh of fuel assembly
+- Each tetrahedron = independent depletion zone
+- Track nuclide concentrations per tetrahedron
+- More accurate than uniform pin-wise depletion
+
+#### 5. **Sensitivity and Uncertainty Analysis Meshes** (Low-Medium Value)
+
+**Use Case**: Generate meshes for adjoint calculations and sensitivity studies.
+
+**Benefits**:
+- **Detector region meshing**: Fine tetrahedral mesh around detectors
+- **Response function support**: Mesh for computing response functionals
+- **Perturbation studies**: Mesh-based material perturbations
+
+### Technical Considerations
+
+#### Advantages of CGAL CDT for OpenMC:
+
+1. **Quality Guarantees**:
+   - Minimum dihedral angle bounds
+   - Maximum radius-edge ratio
+   - Prevents sliver tetrahedra that cause numerical issues
+
+2. **Constraint Preservation**:
+   - Surfaces preserved exactly (material boundaries, geometric features)
+   - Critical for OpenMC: particles crossing material boundaries must see correct interface
+
+3. **Sizing Fields**:
+   - Spatially varying element size
+   - Refine where needed (flux gradients, geometric detail)
+   - Coarsen elsewhere (reduce memory, computation)
+
+4. **Robustness**:
+   - Handles complex geometries reliably
+   - Automatic handling of near-degeneracies
+   - Well-tested on industrial CAD models
+
+5. **Performance**:
+   - Efficient algorithms (O(n log n) for n points)
+   - Parallel mesh generation possible
+   - Suitable for large-scale problems
+
+#### Integration Challenges:
+
+1. **CSG to Boundary Representation**:
+   - OpenMC uses CSG, CDT needs boundary surfaces
+   - Need conversion: CSG → surface triangulation → CDT domain
+   - Non-trivial for complex CSG with many boolean operations
+
+2. **Quality vs. Constraint Trade-off**:
+   - Enforcing constraints may reduce element quality
+   - May need to relax some quality requirements
+   - Balance between accuracy and mesh quality
+
+3. **Output Format Conversion**:
+   - CGAL mesh → libMesh format (Exodus, VTK)
+   - Need to handle element types, node numbering, material IDs
+   - Metadata transfer (material assignments, boundary conditions)
+
+### Comparison with Alternatives
+
+| Method | Pros | Cons |
+|--------|------|------|
+| **CGAL CDT** | Quality guarantees, constraint preservation, adaptive | CSG conversion needed |
+| **Gmsh** | Industry standard, GUI, scripting | Less programmable, external tool |
+| **TetGen** | Fast, widely used | Licensing (AGPL), fewer features |
+| **Triangle+TetGen** | Open source | 2D+3D separate, more complex workflow |
+
+**CGAL Advantage**: Tight C++ integration with OpenMC, full programmatic control, no external executables.
+
+### Recommended Implementation Approach
+
+**Phase 1: Proof of Concept**
+1. Implement CSG → boundary surface extraction
+2. Use CGAL CDT to mesh a simple pin cell
+3. Export to Exodus format
+4. Verify mesh in libMesh tally
+
+**Phase 2: Production Features**
+1. Support for multi-material CSG geometries
+2. Adaptive sizing based on geometry features
+3. Quality control parameters exposed to users
+4. Integration with OpenMC Python API
+
+**Phase 3: Advanced Capabilities**
+1. Importance-driven mesh adaptation
+2. Mesh refinement for depletion
+3. Hybrid CSG-mesh geometries
+4. Parallel mesh generation
+
+### Example Implementation (Conceptual)
+
+```python
+import openmc
+import openmc.mesh_utils  # New module with CGAL
+
+# Define OpenMC geometry (CSG)
+fuel = openmc.Material()
+fuel.add_nuclide('U235', 0.04)
+fuel.add_nuclide('U238', 0.96)
+
+clad = openmc.Material()
+clad.add_element('Zr', 1.0)
+
+fuel_cyl = openmc.ZCylinder(r=0.39)
+clad_cyl = openmc.ZCylinder(r=0.46)
+
+fuel_cell = openmc.Cell(fill=fuel, region=-fuel_cyl)
+gap_cell = openmc.Cell(region=+fuel_cyl & -clad_cyl)
+clad_cell = openmc.Cell(fill=clad, region=+clad_cyl)
+
+# Generate constrained Delaunay tetrahedral mesh
+cdt_mesh = openmc.mesh_utils.ConstrainedDelaunayMesh()
+
+# Extract boundary surfaces from CSG and set as constraints
+cdt_mesh.add_cells([fuel_cell, gap_cell, clad_cell])
+cdt_mesh.preserve_material_boundaries = True
+
+# Set sizing parameters
+cdt_mesh.set_max_element_size(0.05)  # cm
+cdt_mesh.set_min_element_size(0.005)  # cm near boundaries
+
+# Set quality criteria
+cdt_mesh.set_min_dihedral_angle(10.0)  # degrees
+cdt_mesh.set_max_radius_edge_ratio(3.0)
+
+# Generate mesh
+cdt_mesh.generate()
+
+# Export for libMesh
+cdt_mesh.export_exodus('pin_cell_tally.e')
+
+# Use in OpenMC simulation
+tally_mesh = openmc.LibMesh('pin_cell_tally.e')
+mesh_filter = openmc.MeshFilter(tally_mesh)
+
+tally = openmc.Tally()
+tally.filters = [mesh_filter]
+tally.scores = ['flux', 'fission']
+```
+
+### Conclusion: Constrained Delaunay Tetrahedralization Value
+
+**Answer**: Yes, CGAL's constrained Delaunay tetrahedralization has **significant application value** for OpenMC:
+
+**Primary Applications** (High Value):
+1. Automatic generation of high-quality tetrahedral meshes for libMesh tallies
+2. Material-boundary-preserving meshes for accurate per-region scoring
+3. Adaptive mesh refinement for variance reduction and detailed analysis
+
+**Secondary Applications** (Medium Value):
+4. Hybrid CSG-mesh geometry support
+5. Weight window mesh generation
+6. Fine-grained depletion zone creation
+
+**Key Advantage**: Unlike external mesh generators, CGAL integration would provide **programmatic, automated mesh generation** directly from OpenMC's native CSG geometry, eliminating the need for manual mesh creation in external tools.
+
+**Recommended**: Include constrained Delaunay tetrahedralization as a core feature of the proposed `openmc.mesh_utils` module with CGAL backend.
+
 ## References
 
 - DAGMC Documentation: https://svalinn.github.io/DAGMC/
 - MOAB Documentation: https://sigma.mcs.anl.gov/moab-library/
 - libMesh Documentation: https://libmesh.github.io/
 - CGAL Documentation: https://www.cgal.org/
+- CGAL Mesh_3 Package: https://doc.cgal.org/latest/Mesh_3/index.html
 - OpenMC User's Guide: https://docs.openmc.org/en/stable/usersguide/
 
 ---
 
-**Document Version**: 1.0  
+**Document Version**: 1.1  
 **Date**: January 23, 2026  
-**Author**: Analysis based on OpenMC codebase investigation
+**Author**: Analysis based on OpenMC codebase investigation  
+**Addendum**: Constrained Delaunay Tetrahedralization analysis added
