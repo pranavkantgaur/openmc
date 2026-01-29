@@ -117,6 +117,8 @@ OpenMC's derivative tally implementation computes:
 
 $$c_{\text{deriv}} = c \left( \frac{1}{\phi} \frac{d\phi}{dx} + \frac{1}{c} \frac{\partial c}{\partial x}\Bigg|_{\phi} \right) = c \cdot \left( \frac{d\ln\phi}{dx} + \frac{\partial \ln c}{\partial x}\Bigg|_{\phi} \right)$$
 
+where $\phi$ denotes the **scalar neutron flux** (not to be confused with the golden ratio $\phi$ used in Section 6.1).
+
 For **nuclide density derivatives** (e.g., boron concentration), with respect to number density $N$ (atoms/cm³):
 
 $$\frac{1}{c} \frac{\partial c}{\partial N}\Bigg|_{\phi} = \begin{cases}
@@ -128,7 +130,7 @@ For **material density derivatives** $\rho$ (g/cm³):
 
 $$\frac{1}{c} \frac{\partial c}{\partial \rho}\Bigg|_{\phi} = \frac{1}{\rho}$$
 
-The flux derivative $\frac{d\ln\phi}{dx}$ is accumulated during particle transport through collision and track-length scoring.
+The flux derivative $\frac{d\ln\phi}{dx}$ (where $\phi$ is the scalar flux) is accumulated during particle transport through collision and track-length scoring.
 
 ### 4.3 k-eff Derivative via Quotient Rule
 
@@ -152,11 +154,17 @@ $$\sigma_{dk/dx}^2 \approx \left(\frac{\partial}{\partial F}\frac{dk}{dx}\right)
 
 The partial derivatives are:
 
-$$\frac{\partial}{\partial F}\frac{dk}{dx} = -\frac{1}{A^2}\frac{dA}{dx}, \quad \frac{\partial}{\partial A}\frac{dk}{dx} = -\frac{A\frac{dF}{dx} - F\frac{dA}{dx}}{A^3} - \frac{F}{A^2}\frac{d^2A}{dx^2}$$
+$$\frac{\partial}{\partial F}\frac{dk}{dx} = -\frac{1}{A^2}\frac{dA}{dx}, \quad \frac{\partial}{\partial(dF/dx)}\frac{dk}{dx} = \frac{1}{A}$$
 
-$$\frac{\partial}{\partial(dF/dx)}\frac{dk}{dx} = \frac{1}{A}, \quad \frac{\partial}{\partial(dA/dx)}\frac{dk}{dx} = -\frac{F}{A^2}$$
+$$\frac{\partial}{\partial(dA/dx)}\frac{dk}{dx} = -\frac{F}{A^2}$$
 
-In the implementation, this is handled automatically using the `uncertainties` package's `ufloat` class, which tracks correlations.
+For the derivative with respect to $A$, the exact expression includes a second-order term:
+
+$$\frac{\partial}{\partial A}\frac{dk}{dx} = -\frac{A\frac{dF}{dx} - F\frac{dA}{dx}}{A^3} - \frac{F}{A^2}\frac{d^2A}{dx^2}$$
+
+**Note on second-order term**: The term $\frac{d^2A}{dx^2}$ (second derivative of absorption) is **not computed** in the implementation. This is justified because: (i) it represents a higher-order correction that is typically negligible compared to first-order terms, and (ii) the `uncertainties` package used in practice employs first-order Taylor expansion, automatically neglecting this term. For typical reactor physics applications where derivatives vary slowly with $x$, this approximation introduces negligible error.
+
+In the implementation, uncertainty propagation is handled automatically using the `uncertainties` package's `ufloat` class, which tracks correlations between variables using first-order propagation.
 
 ### 4.5 Conversion for Different Search Parameters
 
@@ -197,9 +205,9 @@ $$\mathbf{A} = \begin{bmatrix}
 \frac{1}{\sigma_1} & \frac{x_1}{\sigma_1} \\
 \vdots & \vdots \\
 \frac{1}{\sigma_n} & \frac{x_n}{\sigma_n} \\
-0 & 1 \\
+0 & \frac{1}{\sigma_{g,1}} \\
 \vdots & \vdots \\
-0 & 1
+0 & \frac{1}{\sigma_{g,n_g}}
 \end{bmatrix}, \quad
 \mathbf{b} = \begin{bmatrix}
 \frac{f_1}{\sigma_1} \\
@@ -210,11 +218,28 @@ $$\mathbf{A} = \begin{bmatrix}
 \frac{g_{n_g}}{\sigma_{g,n_g}}
 \end{bmatrix}$$
 
+The top $n$ rows correspond to function value constraints, while the bottom $n_g$ rows are **gradient constraints** (note the 0 in the first column and $1/\sigma_{g,j}$ in the second column for gradient rows).
+
 The solution minimizes $\|\mathbf{A}\mathbf{c} - \mathbf{b}\|^2$:
 
 $$\mathbf{c} = (\mathbf{A}^T\mathbf{A})^{-1}\mathbf{A}^T\mathbf{b}$$
 
-**Implementation note**: This is solved using NumPy's `lstsq` function with SVD-based rank determination, which is numerically stable even for ill-conditioned systems.
+**Implementation note**: This is solved using NumPy's `lstsq` function:
+
+```python
+import numpy as np
+
+# Construct augmented system
+A = np.vstack([point_rows, gradient_rows])
+b_vec = np.hstack([point_targets, gradient_targets])
+
+# Solve via SVD-based least squares
+coeffs, residuals, rank, s = np.linalg.lstsq(A, b_vec, rcond=None)
+a, b = coeffs[0], coeffs[1]
+x_next = -a / b
+```
+
+This SVD-based approach is numerically stable even for ill-conditioned systems.
 
 **Relationship to GRSecant**: The top $n$ rows of $\mathbf{A}$ and $\mathbf{b}$ represent GRSecant's weighted least squares. The bottom $n_g$ rows represent the gradient constraints. When $n_g = 0$, the system reduces to solving GRSecant's Eq. 6 via the normal equations.
 
@@ -224,9 +249,19 @@ When derivative magnitudes vary widely (e.g., $\frac{dk}{d\text{ppm}} \sim 10^{-
 
 $$\tilde{g}_j = \frac{g_j}{s}, \quad \tilde{\sigma}_{g,j} = \frac{\sigma_{g,j}}{s}$$
 
-where $s$ is a scale factor computed as the geometric mean of absolute derivative values:
+where $s$ is a scale factor computed as the **geometric mean** of absolute derivative values:
 
 $$s = \left(\prod_{j: |g_j| > 0} |g_j|\right)^{1/n_g}$$
+
+**Justification for geometric mean**: The geometric mean is chosen over the arithmetic mean for several reasons:
+
+1. **Scale invariance**: For quantities spanning multiple orders of magnitude (e.g., $10^{-20}$ to $10^{-15}$), the geometric mean is less sensitive to outliers than the arithmetic mean, preventing a single large derivative from dominating the normalization.
+
+2. **Multiplicative nature**: Derivatives are inherently multiplicative quantities (chain rule: $\frac{d}{dx}g(f(x)) = g'(f(x)) \cdot f'(x)$). The geometric mean preserves this multiplicative structure.
+
+3. **Logarithmic centering**: For values $v_j$ spanning orders of magnitude, the geometric mean $\exp(\frac{1}{n}\sum \ln |v_j|)$ represents the center on a logarithmic scale, which is the natural scale for derivatives that can range from $10^{-20}$ to $10^{20}$.
+
+4. **Numerical stability**: The geometric mean prevents underflow/overflow better than arithmetic mean when values span extreme ranges. With arithmetic mean, a single $10^{20}$ value would dominate, leading to poor normalization of smaller derivatives.
 
 This normalization:
 - Makes the system numerically stable regardless of parameter units
@@ -237,7 +272,7 @@ The fitted slope $\tilde{b}$ is in normalized units, but since we only need the 
 
 $$x_{\text{root}} = -\frac{a}{\tilde{b} \cdot s} \cdot s = -\frac{a}{\tilde{b}}$$
 
-**Connection to GRSecant**: This normalization step is not needed in standard GRSecant because function values $f(x)$ are typically O(1) (k-eff deviations from criticality). It becomes necessary when adding derivative constraints because $\frac{dk}{dx}$ can have extreme magnitudes depending on parameter units.
+**Connection to GRSecant**: This normalization step is not needed in standard GRSecant because function values $f(x)$ are typically $\mathcal{O}(1)$ (k-eff deviations from criticality). It becomes necessary when adding derivative constraints because $\frac{dk}{dx}$ can have extreme magnitudes depending on parameter units.
 
 ### 5.5 Weighting Strategy
 
@@ -252,13 +287,13 @@ This is optimal under the assumption of **independent Gaussian errors**, which i
 
 ### 6.1 Superlinear Convergence with Gradients
 
-Standard secant method achieves superlinear convergence with order $\phi = (1+\sqrt{5})/2 \approx 1.618$:
+Standard secant method achieves superlinear convergence with order $\phi = (1+\sqrt{5})/2 \approx 1.618$ (where $\phi$ is the **golden ratio**):
 
-$$|x_{n+1} - x^*| = O(|x_n - x^*|^\phi)$$
+$$|x_{n+1} - x^*| = \mathcal{O}(|x_n - x^*|^\phi)$$
 
 When exact derivatives are available, Newton's method achieves quadratic convergence:
 
-$$|x_{n+1} - x^*| = O(|x_n - x^*|^2)$$
+$$|x_{n+1} - x^*| = \mathcal{O}(|x_n - x^*|^2)$$
 
 The gradient-augmented least-squares method interpolates between these extremes:
 
@@ -278,16 +313,16 @@ The unique global minimum is $a' = a, b' = b$, giving $x^* = -a/b$. ∎
 
 We now establish the main convergence result for the gradient-augmented method.
 
-**Theorem 6.3** (Convergence Rate with Gradient Information): *Let $f: \mathbb{R} \to \mathbb{R}$ be twice continuously differentiable in a neighborhood of the root $x^*$ where $f(x^*) = 0$ and $f'(x^*) \neq 0$. Consider the gradient-augmented least-squares iteration where at step $n$ we have:*
+**Theorem 6.3** (Convergence Rate with Gradient Information): *Let $f: \mathbb{R} \to \mathbb{R}$ be twice continuously differentiable in a neighborhood of the root $x^*$ where $f(x^*) = 0$ and $f'(x^*) \neq 0$. Assume further that $f''$ is **Lipschitz continuous** in this neighborhood, i.e., there exists $L > 0$ such that $|f''(x) - f''(y)| \leq L|x - y|$ for all $x, y$ in the neighborhood. Consider the gradient-augmented least-squares iteration where at step $n$ we have:*
 
 1. *Function evaluations $(x_{n-i}, f(x_{n-i}) + \epsilon_i, \sigma_i)$ for $i = 0, \ldots, R+1$*
 2. *Gradient evaluations $(x_{n-j}, f'(x_{n-j}) + \eta_j, \sigma_{g,j})$ for $j \in \mathcal{G}_n$ where $\mathcal{G}_n$ is the index set of available gradients*
-3. *Noise terms $\epsilon_i, \eta_j$ are random with $\mathbb{E}[\epsilon_i] = 0$, $\mathbb{E}[\eta_j] = 0$, $\text{Var}(\epsilon_i) = \sigma_i^2$, $\text{Var}(\eta_j) = \sigma_{g,j}^2$*
+3. *Noise terms $\epsilon_i, \eta_j$ are random with $\mathbb{E}[\epsilon_i] = 0$, $\mathbb{E}[\eta_j] = 0$, $\text{Var}(\epsilon_i) = \sigma_i^2$, $\text{Var}(\eta_j) = \sigma_{g,j}^2$, and **$\epsilon_i$ are mutually independent, $\eta_j$ are mutually independent**, and all $\epsilon_i, \eta_j$ are jointly independent*
 
 *Then, under the following conditions:*
 
 - **(C1)** The iterates $x_{n-i}$ remain in a compact neighborhood $\mathcal{N}(x^*, \delta)$ for some $\delta > 0$
-- **(C2)** The noise levels satisfy $\max_i \sigma_i = o(|x_n - x^*|)$ and $\max_j \sigma_{g,j} = o(1)$
+- **(C2)** The noise levels satisfy $\max_i \sigma_i = o(|x_n - x^*|)$ and $\max_j \sigma_{g,j} = o(1)$ as $n \to \infty$
 - **(C3)** The least-squares system has condition number bounded by $\kappa < \infty$
 - **(C4)** At least one gradient is available: $|\mathcal{G}_n| \geq 1$
 
@@ -295,7 +330,7 @@ We now establish the main convergence result for the gradient-augmented method.
 
 $$\mathbb{E}[|x_{n+1} - x^*|] \leq C_1 \max_i |x_{n-i} - x^*|^2 + C_2 \max_i \sigma_i + C_3 \max_j \sigma_{g,j}$$
 
-*where $C_1, C_2, C_3$ are constants depending on $f'$, $f''$, $\kappa$, and $|\mathcal{G}_n|$.*
+*where $C_1, C_2, C_3$ are constants depending on $f'$, $f''$, $L$ (Lipschitz constant), $\kappa$, and $|\mathcal{G}_n|$.*
 
 **Proof**:
 
@@ -331,10 +366,10 @@ where $w_i = \sigma_i^{-2}$ and $w_{g,j} = \sigma_{g,j}^{-2}$ are the weights.
 
 The key observation: **gradient terms enter linearly** (through $f''(\xi_j')e_j$) while function values contribute **quadratically** (through $e_i^2$). Therefore, when gradients are present:
 
-$$\hat{b} - f'(x^*) = O(\max_i |e_i|) \quad \text{instead of} \quad O(\max_i |e_i|^2)$$
+$$\hat{b} - f'(x^*) = \mathcal{O}(\max_i |e_i|) \quad \text{instead of} \quad \mathcal{O}(\max_i |e_i|^2)$$
 
 This leads to:
-$$x_{n+1} - x^* = \frac{\hat{a} + \hat{b} x^*}{\hat{b}} = O(\max_i |e_i|^2)$$
+$$x_{n+1} - x^* = \frac{\hat{a} + \hat{b} x^*}{\hat{b}} = \mathcal{O}(\max_i |e_i|^2)$$
 
 The second-order convergence arises because the improved slope estimate $\hat{b} \approx f'(x^*)$ makes the linear model more accurate.
 
@@ -345,21 +380,21 @@ $$\hat{a} = \hat{a}_{\text{det}} + \Delta a, \quad \hat{b} = \hat{b}_{\text{det}
 
 where $\Delta a, \Delta b$ depend on $\epsilon_i, \eta_j$. By the weighted least-squares solution:
 
-$$\Delta b = \frac{\sum_i w_i x_{n-i} \epsilon_i + \sum_{j \in \mathcal{G}_n} w_{g,j} \eta_j}{\sum_i w_i x_{n-i}^2 + \sum_{j \in \mathcal{G}_n} w_{g,j}} + O((\epsilon_i \epsilon_k))$$
+$$\Delta b = \frac{\sum_i w_i x_{n-i} \epsilon_i + \sum_{j \in \mathcal{G}_n} w_{g,j} \eta_j}{\sum_i w_i x_{n-i}^2 + \sum_{j \in \mathcal{G}_n} w_{g,j}} + \mathcal{O}((\epsilon_i \epsilon_k))$$
 
 Taking expectations and using independence:
 $$\mathbb{E}[\Delta b] = 0, \quad \text{Var}(\Delta b) = \frac{\sum_i w_i^2 \sigma_i^2 x_{n-i}^2 + \sum_{j \in \mathcal{G}_n} w_{g,j}^2 \sigma_{g,j}^2}{(\sum_i w_i x_{n-i}^2 + \sum_{j \in \mathcal{G}_n} w_{g,j})^2}$$
 
 Since $w_{g,j} = \sigma_{g,j}^{-2}$:
-$$\text{Var}(\Delta b) = O\left(\frac{1}{\sum_j \sigma_{g,j}^{-2}}\right) = O(\max_j \sigma_{g,j}^2)$$
+$$\text{Var}(\Delta b) = \mathcal{O}\left(\frac{1}{\sum_j \sigma_{g,j}^{-2}}\right) = \mathcal{O}(\max_j \sigma_{g,j}^2)$$
 
 The error in the root prediction:
 $$x_{n+1} - x^* = -\frac{\hat{a} + \hat{b}x^*}{\hat{b}} = -\frac{\Delta a + \Delta b \cdot x^*}{\hat{b}_{\text{det}} + \Delta b}$$
 
 By Taylor expansion:
-$$\mathbb{E}[|x_{n+1} - x^*|] \leq \frac{|\mathbb{E}[\Delta a]| + |x^*| |\mathbb{E}[\Delta b]|}{|f'(x^*)|} + O(\text{Var}(\Delta a), \text{Var}(\Delta b))$$
+$$\mathbb{E}[|x_{n+1} - x^*|] \leq \frac{|\mathbb{E}[\Delta a]| + |x^*| |\mathbb{E}[\Delta b]|}{|f'(x^*)|} + \mathcal{O}(\text{Var}(\Delta a), \text{Var}(\Delta b))$$
 
-This gives the noise contribution: $O(\max_i \sigma_i + \max_j \sigma_{g,j})$.
+This gives the noise contribution: $\mathcal{O}(\max_i \sigma_i + \max_j \sigma_{g,j})$.
 
 **Part III: Combined Bound**
 
@@ -380,7 +415,7 @@ $$\lim_{n \to \infty} \frac{|x_{n+1} - x^*|}{|x_n - x^*|^2} \leq C < \infty$$
 
 *This matches Newton's method despite using only function values and gradients (not Hessians).*
 
-**Remark 6.5**: The theorem explains the empirical 37-52% reduction in iterations. Each gradient provides $O(1/\sigma_{g,j}^2)$ additional information, effectively equivalent to $\gamma_n \approx 2$-4 additional function evaluations in the slope determination.
+**Remark 6.5**: The theorem explains the empirical 37-52% reduction in iterations. Each gradient provides $\mathcal{O}(1/\sigma_{g,j}^2)$ additional information, effectively equivalent to $\gamma_n \approx 2$-4 additional function evaluations in the slope determination.
 
 ### 6.3 Comparison with Standard Methods
 
@@ -547,20 +582,26 @@ The current implementation uses a **linear model** $f(x) = a + bx$. Potential ex
 
 The current method handles **single-parameter** searches. Extension to **multi-dimensional** parameter spaces $(x_1, x_2, \ldots, x_n)$ would require:
 
-- Gradient vectors $\nabla k = [\frac{\partial k}{\partial x_1}, \ldots, \frac{\partial k}{\partial x_n}]$
-- Multi-dimensional least-squares fitting
-- More sophisticated convergence criteria
+- **Jacobian matrix** $\mathbf{J} = [\frac{\partial k}{\partial x_1}, \ldots, \frac{\partial k}{\partial x_n}]$ instead of scalar derivatives
+- Multi-dimensional least-squares fitting: $k(\mathbf{x}) \approx k_0 + \mathbf{J}^T (\mathbf{x} - \mathbf{x}_0)$
+- Solving the linear system $\mathbf{J}^T \Delta \mathbf{x} = k_{\text{target}} - k_0$ for parameter updates
+- **Krylov methods** (e.g., GMRES, BiCGSTAB) for large-scale systems where computing full Jacobian is expensive
+- More sophisticated convergence criteria accounting for directional uncertainties
+
+The Jacobian approach scales linearly with the number of parameters, making derivative tallies particularly valuable for high-dimensional searches.
 
 ### 10.3 Improved Temperature Derivatives
 
 Temperature derivatives currently have limitations:
-- Require Windowed Multipole cross section data
+- Require **Windowed Multipole** cross section data
 - Valid only in resolved resonance range (~1 eV to ~10 keV)
-- Not available for most nuclides
+- **In OpenMC, only available for**: $^{238}\text{U}$, $^{235}\text{U}$, and $^{239}\text{Pu}$ (as of version 0.14)
+- Not available for most other nuclides
 
 Enhancements could include:
 - Finite-difference approximations for non-multipole nuclides
 - Hybrid methods combining analytical and numerical derivatives
+- Extension of multipole data library to additional isotopes
 
 ## 11. Conclusion
 
