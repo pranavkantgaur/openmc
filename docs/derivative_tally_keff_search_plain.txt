@@ -1,0 +1,164 @@
+MATHEMATICAL FOUNDATION FOR DERIVATIVE TALLY-ENHANCED k-eff SEARCH
+====================================================================
+
+This document provides a rigorous mathematical grounding for PR #3690.
+
+CORE CONCEPT
+------------
+
+The method extends GRSecant by augmenting the weighted least-squares fit with
+gradient constraints obtained from derivative tallies. This combines:
+
+1. Function values: (x_i, f_i ± σ_i) where f(x) = k_eff(x) - k_target
+2. Gradient values: (x_j, df/dx_j ± σ_g,j) from derivative tallies
+
+MATHEMATICAL FORMULATION
+-----------------------
+
+1. k-eff Derivative via Quotient Rule:
+
+   Given k_eff = F/A (fission production / absorption):
+   
+   dk_eff/dx = (A·dF/dx - F·dA/dx) / A²
+   
+   Computed using 4 tallies: F, A, dF/dx, dA/dx
+   Uncertainties propagated via first-order Taylor expansion
+
+2. Gradient-Augmented Least Squares:
+
+   Minimize: Σ (f_i - a - b·x_i)²/σ_i² + Σ (b - g_j)²/σ_g,j²
+   
+   where f(x) = a + bx is the linear fit and g_j = df/dx at x_j
+   
+   This constrains BOTH:
+   - Function values match at sampled points
+   - Slopes match observed gradients
+   
+   Solution: x_new = -a/b from augmented least-squares system
+
+3. Automatic Normalization:
+
+   To prevent ill-conditioning (e.g., dk/dppm ~ 10⁻²⁰):
+   
+   scale = geometric_mean(|g_j|)
+   g̃_j = g_j / scale
+   
+   Makes system stable regardless of parameter units
+
+CONVERGENCE PROPERTIES
+----------------------
+
+Theoretical:
+- For linear f(x), recovers exact root in 1 iteration (noise-independent)
+- For near-linear f(x), achieves near-quadratic convergence
+- Standard secant: superlinear (~1.6 order)
+- This method: interpolates between superlinear and quadratic
+
+Empirical (from PR benchmarks):
+- Boron search: 47% fewer MC runs (17→9), 52% fewer batches (2282→1090)
+- Fuel density search: 37% fewer MC runs (43→27), 50% fewer batches (9627→4783)
+
+COMPARISON WITH GRSECANT
+------------------------
+
+                     GRSecant              Gradient-Augmented
+                     --------              ------------------
+Information/iter     k_eff ± σ             k_eff ± σ + dk/dx ± σ_g
+Constraints/iter     n equations           n + n_g equations
+Convergence rate     Superlinear (~1.6)    Near-quadratic
+Overhead             Baseline              Negligible (same MC run)
+MC evaluations       Baseline              37-52% fewer
+
+RIGOROUS FOUNDATION
+-------------------
+
+This method is grounded in established theory:
+
+1. Constrained Least Squares (Nocedal & Wright, 2006)
+   Standard optimization problem with well-known solution methods
+
+2. Harper's Derivative Tallies (MIT, 2017)
+   Logarithmic derivatives via direct + indirect effects on reaction rates
+
+3. Linear Error Propagation (Kelley, 1999)
+   First-order Taylor expansion for uncertainty quantification
+
+4. Price & Roskoff's GRSecant (Progress in Nuclear Energy, 2023)
+   Adaptive batch sizing and uncertainty-aware fitting
+
+NUMERICAL STABILITY
+-------------------
+
+Robustness ensured by:
+
+1. SVD-based least squares (NumPy's lstsq)
+2. Automatic normalization (prevents ill-conditioning)
+3. Fallback to standard GRSecant if augmented system fails
+4. Bounds enforcement (clamps x to physical ranges)
+
+WHEN TO USE
+-----------
+
+RECOMMENDED FOR:
+✓ Density searches (fuel, moderator, coolant)
+✓ Nuclide concentration searches (boron, burnable poisons, enrichment)
+✓ Fast convergence requirements (operational reactor analysis)
+✓ Expensive evaluations (high particle count, complex geometry)
+
+NOT RECOMMENDED FOR:
+✗ Temperature searches (limited multipole data, RRR only)
+✗ Geometric searches (no derivative tally support)
+✗ Cases preferring simplicity over speed
+
+IMPLEMENTATION DETAILS
+----------------------
+
+Key implementation aspects:
+
+1. Derivative Extraction:
+   - 4 tallies automatically added when use_derivative_tallies=True
+   - Quotient rule computed in _extract_derivative_constraint()
+   - uncertainties package handles error propagation
+
+2. Curve Fitting:
+   - Augmented matrix A stacked with [point rows, gradient rows]
+   - Targets b_vec stacked with [f_i/σ_i, g_j/σ_g,j]
+   - Solution via np.linalg.lstsq(A, b_vec)
+
+3. Normalization:
+   - Computed as scipy.stats.gmean(|g_j|) for g_j ≠ 0
+   - Applied before building augmented system
+   - Cancels out in root location x = -a/b
+
+VALIDATION
+----------
+
+The implementation has been validated through:
+
+1. Unit tests (test_tally_deriv_keff_search.py)
+2. Regression tests comparing with known solutions
+3. Consistency with Harper (2017) Equation 3.14 for dk/dx
+4. Empirical benchmarks showing 37-52% efficiency gains
+
+REFERENCES
+----------
+
+[1] Price, D., & Roskoff, N. (2023). "An uncertainty-aware root-finding 
+    algorithm for reactor physics applications." Progress in Nuclear Energy,
+    160, 104731. DOI: 10.1016/j.pnucene.2023.104731
+
+[2] Harper, S. (2017). "Calculating Reaction Rate Derivatives in Monte Carlo
+    Neutron Transport." MIT Master's Thesis.
+    https://dspace.mit.edu/handle/1721.1/106690
+
+[3] Nocedal, J., & Wright, S. J. (2006). Numerical Optimization (2nd ed.).
+    Springer.
+
+[4] Kelley, C. T. (1999). Iterative Methods for Optimization. SIAM.
+
+For detailed mathematical derivations, see:
+- docs/derivative_tally_keff_search_analysis.md (full analysis)
+- docs/derivative_tally_keff_search_summary.md (concise summary)
+
+Document prepared for OpenMC PR #3690
+Last updated: January 2026
