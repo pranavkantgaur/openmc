@@ -46,54 +46,53 @@ $$x_{n+1} = x_n - f(x_n) \frac{x_n - x_{n-1}}{f(x_n) - f(x_{n-1})}$$
 
 However, this approach ignores the stochastic uncertainty inherent in Monte Carlo evaluations of k-eff.
 
-### 3.2 GRSecant: Weighted Least Squares Fit  
+### 3.2 GRSecant: Weighted Least Squares Fit
 
-The GRSecant algorithm (Price and Roskoff, 2023) uses a **weighted least-squares fit** over the $R+2$ most recent evaluations to account for uncertainties, where $R$ is the **memory parameter** (typically $R=2$). Given points $(x_i, f_i, \sigma_i)$ where $\sigma_i$ is the standard deviation of $f_i$, we fit a linear model:
+The GRSecant algorithm (Price and Roskoff, 2023) uses a weighted least-squares fit over the $m$ most recent evaluations to account for uncertainties. Given points $(x_i, f_i, \sigma_i)$ where $\sigma_i$ is the standard deviation of $f_i$, we fit a linear model:
 
 $$f(x) = a + bx$$
 
-by minimizing the **weighted residual sum of squares** (Eq. A.14 in Price & Roskoff):
+by minimizing the weighted residual sum of squares:
 
-$$R(a, b) = \sum_{i=0}^{R+1} \frac{(f(x_{n-i}) - a - bx_{n-i})^2}{\sigma_{f,n-i}^2}$$
+$$\chi^2 = \sum_{i=1}^{m} \frac{(f_i - a - bx_i)^2}{\sigma_i^2}$$
 
-Note the critical difference from standard least squares: each residual is **inversely weighted by its variance**. Points with lower uncertainty contribute more to the fit.
+This yields the least-squares system:
 
-The solution minimizes this objective by taking derivatives with respect to $a$ and $b$ and setting them to zero, yielding (Eq. 6 in Price & Roskoff):
+$$\begin{bmatrix}
+\sum \frac{1}{\sigma_i^2} & \sum \frac{x_i}{\sigma_i^2} \\
+\sum \frac{x_i}{\sigma_i^2} & \sum \frac{x_i^2}{\sigma_i^2}
+\end{bmatrix}
+\begin{bmatrix}
+a \\
+b
+\end{bmatrix}
+=
+\begin{bmatrix}
+\sum \frac{f_i}{\sigma_i^2} \\
+\sum \frac{x_i f_i}{\sigma_i^2}
+\end{bmatrix}$$
 
-$$x_{n+1} = \frac{\sum_{i=0}^{R+1} \frac{f(x_{n-i})}{\sigma_{f,n-i}^2} \sum_{i=0}^{R+1} \frac{x_{n-i}^2}{\sigma_{f,n-i}^2} - \sum_{i=0}^{R+1} \frac{x_{n-i} f(x_{n-i})}{\sigma_{f,n-i}^2} \sum_{i=0}^{R+1} \frac{x_{n-i}}{\sigma_{f,n-i}^2}}{(R+2) \sum_{i=0}^{R+1} \frac{x_{n-i} f(x_{n-i})}{\sigma_{f,n-i}^2} - \sum_{i=0}^{R+1} \frac{f(x_{n-i})}{\sigma_{f,n-i}^2} \sum_{i=0}^{R+1} \frac{x_{n-i}}{\sigma_{f,n-i}^2}}$$
+The next evaluation point is predicted as:
 
-This is the **exact form** used in the GRSecant paper. The next evaluation point is where the fitted line crosses zero: $x_{n+1} = -a/b$.
+$$x_{n+1} = -\frac{a}{b}$$
 
 ### 3.3 Adaptive Uncertainty Control
 
-GRSecant adaptively adjusts the number of batches $B_{n+1}$ to achieve a target uncertainty $\sigma_{f,n+1}$ based on the proximity to convergence. This is one of the **key innovations** of the GRSecant method (Eq. 8 in Price & Roskoff):
+GRSecant adaptively adjusts the number of batches $B_{n+1}$ to achieve a target uncertainty $\sigma_{\text{target},n+1}$ based on the proximity to convergence (Eq. 8 in Price and Roskoff):
 
-$$\sigma_{f,n+1} = 0.95 \cdot \sigma_{\text{final}} \left( \frac{\min_{k=0,1,\ldots,n} |f(x_k)|}{k_{\text{tol}}} \right)^p$$
+$$\sigma_{\text{target},n+1} = q \sigma_{\text{final}} \left( \frac{\min_{i \leq n} |f_i|}{k_{\text{tol}}} \right)^p$$
 
 where:
-- $\sigma_{\text{final}}$ is the maximum acceptable final uncertainty (user-specified)
-- $k_{\text{tol}}$ is the convergence tolerance on $|f|$ (user-specified, typically 20-100 pcm)
-- $p$ controls the rate of uncertainty reduction (typically $p=0.5$ for optimal performance)
-- The factor 0.95 allows both convergence criteria to be satisfied simultaneously
-- $\min_{k=0,1,\ldots,n} |f(x_k)|$ tracks the best result achieved so far
+- $q < 1$ is a multiplicative safety factor (typically 0.95)
+- $p$ controls the rate of uncertainty reduction (typically 0.5)
+- $k_{\text{tol}}$ is the convergence tolerance on $|f|$
+- $\sigma_{\text{final}}$ is the maximum acceptable final uncertainty
 
-**Theoretical motivations** (from Price & Roskoff):
-
-1. **Coordinated convergence**: When $|f(x_n)| < k_{\text{tol}}$, the formula ensures $\sigma_{f,n+1} < \sigma_{\text{final}}$, allowing both termination criteria to be satisfied within one iteration of each other.
-
-2. **Monotonic uncertainty reduction**: Even if $|f(x_n)|$ increases due to stochasticity, $\sigma_{f,n+1}$ monotonically decreases, helping minimize cyclic search behavior.
-
-3. **Computational efficiency**: Early iterations use higher uncertainties (fewer samples) for faster evaluations. As convergence approaches, uncertainty decreases (more samples) for precision.
-
-The number of batches is determined using a **regression-based empirical model** (Eq. 9 in Price & Roskoff):
+The number of batches is determined using an empirical model:
 
 $$\sigma \approx \frac{k}{\sqrt{B}}$$
 
-where $k$ is estimated from previous evaluations by fitting $\ln(\sigma) = \ln(k) - 0.5 \ln(B)$ using linear regression. This allows prediction of the batch count needed to achieve $\sigma_{f,n+1}$.
-
-**Convergence criteria** (both must be satisfied):
-1. **Proximity**: $|f(x_n)| \leq k_{\text{tol}}$  
-2. **Certainty**: $\sigma_{f,n} \leq \sigma_{\text{final}}$
+where $k$ is estimated from recent evaluations by fitting $\ln(\sigma) = \ln(k) - 0.5 \ln(B)$.
 
 ## 4. Derivative Tally Theory
 
@@ -168,28 +167,17 @@ The user must provide the conversion function $\frac{dN}{dx}$ via the `deriv_to_
 
 ## 5. Gradient-Augmented Least Squares Method
 
-### 5.1 Extension of GRSecant with Derivative Tallies
+### 5.1 Augmented Optimization Problem
 
-The derivative tally-enhanced method (PR #3690) extends GRSecant by augmenting its weighted least-squares objective with gradient constraints. This preserves all of GRSecant's adaptive uncertainty control (Section 3.3) while adding derivative information.
-
-**Key insight**: GRSecant already solves a weighted least-squares problem. We extend this by adding additional rows to the system—one for each gradient observation.
-
-### 5.2 Augmented Optimization Problem
-
-Given $n$ point evaluations $(x_i, f_i, \sigma_i)$ from GRSecant's memory window (typically last $R+2 = 4$ points) and $n_g$ gradient evaluations $(x_j, g_j, \sigma_{g,j})$ where $g_j = \frac{df}{dx}\Big|_{x_j}$, we minimize:
+The derivative tally-enhanced method augments the standard least-squares objective with gradient constraints. Given $n$ point evaluations $(x_i, f_i, \sigma_i)$ and $n_g$ gradient evaluations $(x_j, g_j, \sigma_{g,j})$ where $g_j = \frac{df}{dx}\Big|_{x_j}$, we minimize:
 
 $$\mathcal{L}(a, b) = \sum_{i=1}^{n} \frac{(f_i - a - bx_i)^2}{\sigma_i^2} + \sum_{j=1}^{n_g} \frac{(b - g_j)^2}{\sigma_{g,j}^2}$$
 
-**Relationship to GRSecant**: 
-- When $n_g = 0$ (no derivatives), this reduces exactly to GRSecant (Eq. A.14 in Price & Roskoff)
-- The first term is identical to GRSecant's weighted least squares
-- The second term adds constraints that the slope $b$ should match observed gradients $g_j$
-
 This is a **constrained least-squares problem** where:
-- The first term fits the linear model to function values (GRSecant baseline)
-- The second term constrains the slope $b$ to match gradient observations (new contribution)
+- The first term fits the linear model to function values
+- The second term constrains the slope $b$ to match observed gradients
 
-### 5.3 Matrix Formulation
+### 5.2 Matrix Formulation
 
 We can write this as an augmented linear system $\mathbf{A}\mathbf{c} = \mathbf{b}$ where $\mathbf{c} = [a, b]^T$:
 
@@ -214,11 +202,9 @@ The solution minimizes $\|\mathbf{A}\mathbf{c} - \mathbf{b}\|^2$:
 
 $$\mathbf{c} = (\mathbf{A}^T\mathbf{A})^{-1}\mathbf{A}^T\mathbf{b}$$
 
-**Implementation note**: This is solved using NumPy's `lstsq` function with SVD-based rank determination, which is numerically stable even for ill-conditioned systems.
+This is solved using NumPy's `lstsq` function with automatic rank determination.
 
-**Relationship to GRSecant**: The top $n$ rows of $\mathbf{A}$ and $\mathbf{b}$ represent GRSecant's weighted least squares. The bottom $n_g$ rows represent the gradient constraints. When $n_g = 0$, the system reduces to solving GRSecant's Eq. 6 via the normal equations.
-
-### 5.4 Derivative Normalization
+### 5.3 Derivative Normalization
 
 When derivative magnitudes vary widely (e.g., $\frac{dk}{d\text{ppm}} \sim 10^{-20}$ for boron concentration in ppm), the least-squares system can become ill-conditioned. The implementation applies **automatic normalization**:
 
@@ -230,23 +216,21 @@ $$s = \left(\prod_{j: |g_j| > 0} |g_j|\right)^{1/n_g}$$
 
 This normalization:
 - Makes the system numerically stable regardless of parameter units
-- Preserves the relative weighting between gradients  
+- Preserves the relative weighting between gradients
 - Does not affect the solution since it cancels in the ratio $\frac{\tilde{g}_j}{\tilde{\sigma}_{g,j}}$
 
 The fitted slope $\tilde{b}$ is in normalized units, but since we only need the root location $x = -a/b$, the scaling cancels:
 
 $$x_{\text{root}} = -\frac{a}{\tilde{b} \cdot s} \cdot s = -\frac{a}{\tilde{b}}$$
 
-**Connection to GRSecant**: This normalization step is not needed in standard GRSecant because function values $f(x)$ are typically O(1) (k-eff deviations from criticality). It becomes necessary when adding derivative constraints because $\frac{dk}{dx}$ can have extreme magnitudes depending on parameter units.
-
-### 5.5 Weighting Strategy
+### 5.4 Weighting Strategy
 
 The augmented system naturally incorporates uncertainty weighting:
-- Function evaluations are weighted by $1/\sigma_i^2$ (GRSecant baseline)
-- Gradient constraints are weighted by $1/\sigma_{g,j}^2$ (new contribution)
+- Function evaluations are weighted by $1/\sigma_i^2$ (standard practice)
+- Gradient constraints are weighted by $1/\sigma_{g,j}^2$
 - More precise measurements have higher influence
 
-This is optimal under the assumption of **independent Gaussian errors**, which is approximately true for Monte Carlo tallies with sufficient samples. The weighting strategy is a direct extension of GRSecant's approach (Eq. A.14 in Price & Roskoff) to include derivative information.
+This is optimal under the assumption of **independent Gaussian errors**, which is approximately true for Monte Carlo tallies with sufficient samples.
 
 ## 6. Convergence Analysis
 
@@ -303,27 +287,21 @@ These gains arise from:
 
 ## 7. Comparison with GRSecant
 
-### 7.1 Similarities (Preserved from GRSecant)
+### 7.1 Similarities
 
 Both methods:
-- Use **weighted least-squares fitting** to handle stochastic uncertainties (Eq. A.14 in Price & Roskoff)
-- Apply **adaptive uncertainty control** via Eq. 8 (same formula, same parameters)
-- Use **memory parameter** $R$ to limit points in fit (typically $R=2$, using last 4 evaluations)
-- Employ **batch size estimation** via Eq. 9 to translate target uncertainty to generations
-- Satisfy **dual convergence criteria**: $|f| \leq k_{\text{tol}}$ AND $\sigma \leq \sigma_{\text{final}}$
-- Converge to the same root (up to tolerance and stochasticity)
+- Use weighted least-squares fitting to handle stochastic uncertainties
+- Adaptively adjust batch sizes based on proximity to convergence
+- Support memory-limited fitting (use only recent $m$ points)
+- Converge to the same root (up to tolerance)
 
-**Critical insight**: The derivative tally enhancement preserves all of GRSecant's adaptive control logic. It only modifies the curve fitting step by adding gradient constraints.
+### 7.2 Differences
 
-### 7.2 Key Differences
-
-| Aspect | GRSecant (Price & Roskoff 2023) | Gradient-Augmented (PR #3690) |
-|--------|----------------------------------|-------------------------------|
+| Aspect | GRSecant | Gradient-Augmented |
+|--------|----------|-------------------|
 | **Information per iteration** | $k_{\text{eff}} \pm \sigma$ | $k_{\text{eff}} \pm \sigma$ + $\frac{dk}{dx} \pm \sigma_g$ |
-| **Objective function** | $\sum \frac{(f_i - a - bx_i)^2}{\sigma_i^2}$ | $\sum \frac{(f_i - a - bx_i)^2}{\sigma_i^2} + \sum \frac{(b - g_j)^2}{\sigma_{g,j}^2}$ |
 | **Degrees of freedom** | 2 (a, b) | 2 (a, b) |
-| **Constraints per iteration** | $R+2$ equations (typically 4) | $(R+2) + n_g$ equations |
-| **Matrix system size** | $(R+2) \times 2$ | $(R+2+n_g) \times 2$ |
+| **Constraints** | $n$ point equations | $n$ point + $n_g$ gradient equations |
 | **System size** | $n \times 2$ | $(n + n_g) \times 2$ |
 | **Computational cost** | Low | Low (negligible overhead) |
 | **Convergence rate** | Superlinear (~1.6) | Near-quadratic (with gradients) |
@@ -443,38 +421,7 @@ Enhancements could include:
 
 ## 11. Conclusion
 
-The derivative tally-enhanced k-eff search method provides a mathematically sound and computationally efficient extension to the **GRSecant algorithm** (Price and Roskoff, Progress in Nuclear Energy, 2023). By incorporating gradient information through an augmented least-squares formulation while preserving all of GRSecant's adaptive uncertainty control mechanisms, the method achieves:
-
-1. **Faster convergence**: 37-52% reduction in Monte Carlo evaluations compared to GRSecant baseline
-2. **Rigorous uncertainty treatment**: Derivatives weighted by their uncertainties, following GRSecant's philosophy
-3. **Numerical stability**: Automatic normalization prevents ill-conditioning
-4. **Backward compatibility**: Falls back to standard GRSecant when derivatives unavailable
-5. **Preserved adaptive control**: Uses GRSecant's Equations 8 and 9 for uncertainty and batch management
-
-The method is grounded in:
-- **GRSecant foundation** (Price & Roskoff 2023): Weighted least squares with adaptive uncertainty control
-- **Harper's derivative theory** (MIT 2017): Monte Carlo reaction rate derivatives via collision tracking
-- **Constrained optimization** (Nocedal & Wright 2006): Augmented least-squares formulation
-- **Empirical validation**: Demonstrates 37-52% efficiency gains on boron and fuel density searches
-
-**Key contribution**: This work shows that GRSecant's uncertainty-aware framework can be extended to leverage gradient information without compromising its adaptive control properties. The augmented least-squares formulation (Section 5) preserves GRSecant's weighted fitting while adding gradient constraints, resulting in a method that converges faster while maintaining the same level of robustness to Monte Carlo uncertainties.
-
-## Acknowledgments
-
-This work builds upon the **GRSecant algorithm** developed by Dean Price and Nathan Roskoff (Westinghouse Electric Company LLC and University of Michigan), published in Progress in Nuclear Energy, 162, 104731 (2023), DOI: 10.1016/j.pnucene.2023.104731. The GRSecant paper provides the theoretical foundation for uncertainty-aware root finding in Monte Carlo codes, including:
-
-- The weighted least-squares formulation (Eq. A.14)
-- The adaptive uncertainty control formula (Eq. 8)
-- The batch size estimation method (Eq. 9) 
-- The memory-limited regression approach (parameter R)
-- Comprehensive testing on microreactor control drum searches
-
-The current work extends GRSecant by adding gradient constraints from derivative tallies while preserving all of its adaptive control mechanisms.
-
-## References
-
-1. **Price, D., & Roskoff, N. (2023).** "Method for control drum position critical search with Monte Carlo codes." *Progress in Nuclear Energy*, 162, 104731. DOI: 10.1016/j.pnucene.2023.104731  
-   [**Primary reference for GRSecant algorithm**]
+The derivative tally-enhanced k-eff search method provides a mathematically sound and computationally efficient extension to the GRSecant algorithm. By incorporating gradient information through an augmented least-squares formulation, the method achieves:
 
 1. **Faster convergence**: 37-52% reduction in Monte Carlo evaluations
 2. **Rigorous uncertainty treatment**: Derivatives weighted by their uncertainties
@@ -485,22 +432,17 @@ The method is grounded in established theory from numerical optimization (constr
 
 ## References
 
-1. **Price, D., & Roskoff, N. (2023).** "Method for control drum position critical search with Monte Carlo codes." *Progress in Nuclear Energy*, 162, 104731. DOI: 10.1016/j.pnucene.2023.104731  
-   [**Primary reference for GRSecant algorithm - Equations 6, 8, 9, and A.14**]
+1. Price, D., & Roskoff, N. (2023). "An uncertainty-aware root-finding algorithm for reactor physics applications in Monte Carlo codes." *Progress in Nuclear Energy*, 160, 104731. DOI: 10.1016/j.pnucene.2023.104731
 
-2. **Harper, S. (2017).** "Calculating Reaction Rate Derivatives in Monte Carlo Neutron Transport." MIT Master's Thesis. [https://dspace.mit.edu/handle/1721.1/106690](https://dspace.mit.edu/handle/1721.1/106690)  
-   [**Primary reference for derivative tally methodology**]
+2. Harper, S. (2017). "Calculating Reaction Rate Derivatives in Monte Carlo Neutron Transport." MIT Master's Thesis. [https://dspace.mit.edu/handle/1721.1/106690](https://dspace.mit.edu/handle/1721.1/106690)
 
-3. **Romano, P. K., et al. (2015).** "OpenMC: A state-of-the-art Monte Carlo code for research and development." *Annals of Nuclear Energy*, 82, 90-97.
+3. Romano, P. K., et al. (2015). "OpenMC: A state-of-the-art Monte Carlo code for research and development." *Annals of Nuclear Energy*, 82, 90-97.
 
-4. **Nocedal, J., & Wright, S. J. (2006).** "Numerical Optimization" (2nd ed.). Springer.  
-   [**Reference for constrained least-squares theory**]
+4. Kelley, C. T. (1999). "Iterative Methods for Optimization." SIAM.
 
-5. **Kelley, C. T. (1999).** "Iterative Methods for Optimization." SIAM.
+5. Nocedal, J., & Wright, S. J. (2006). "Numerical Optimization" (2nd ed.). Springer.
 
 ---
 
 *Document prepared for OpenMC PR #3690*  
-*Mathematical analysis of derivative tally-enhanced k-eff search*  
-*Extension of GRSecant algorithm (Price & Roskoff 2023)*  
 *Last updated: January 2026*
