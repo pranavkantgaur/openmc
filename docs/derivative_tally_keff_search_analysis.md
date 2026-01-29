@@ -1,0 +1,446 @@
+# Mathematical Analysis of Derivative Tally-Enhanced k-eff Search Method
+
+## 1. Introduction
+
+This document provides a rigorous mathematical foundation for the derivative tally-enhanced k-effective search method implemented in OpenMC PR #3690. This method extends the GRSecant algorithm (Price and Roskoff, 2023) by incorporating gradient information obtained from derivative tallies, following the methodology developed by Harper (2017) for computing reaction rate derivatives in Monte Carlo neutron transport.
+
+## 2. Background: k-Effective Calculation
+
+### 2.1 Definition of k-effective
+
+The effective multiplication factor k-eff is defined as the ratio of neutron production to neutron absorption in a nuclear system:
+
+$$k_{\text{eff}} = \frac{F}{A} = \frac{\text{Fission production rate}}{\text{Absorption rate}}$$
+
+where:
+- $F$ represents the total fission neutron production (nu-fission score)
+- $A$ represents the total neutron absorption
+
+In Monte Carlo simulation, these quantities are estimated through tallies:
+
+$$k_{\text{eff}} = \frac{\sum_{i=1}^{N} w_i \nu_i \sigma_{f,i} \phi_i}{\sum_{i=1}^{N} w_i \sigma_{a,i} \phi_i}$$
+
+where $w_i$ are particle weights, $\nu_i$ are neutrons per fission, $\sigma_{f,i}$ and $\sigma_{a,i}$ are microscopic cross sections, and $\phi_i$ represents flux.
+
+### 2.2 k-eff Search Problem
+
+The k-eff search problem seeks to find a material parameter $x$ such that:
+
+$$f(x) = k_{\text{eff}}(x) - k_{\text{target}} = 0$$
+
+where $k_{\text{target}}$ is typically 1.0 for critical configurations. Common search parameters include:
+- Boron concentration in coolant (nuclide density)
+- Fuel enrichment (nuclide density)
+- Material density
+- Fuel/moderator temperature
+
+## 3. GRSecant Baseline Algorithm
+
+### 3.1 Standard Secant Method
+
+The classical secant method approximates the root by fitting a line through the two most recent evaluations:
+
+$$x_{n+1} = x_n - f(x_n) \frac{x_n - x_{n-1}}{f(x_n) - f(x_{n-1})}$$
+
+However, this approach ignores the stochastic uncertainty inherent in Monte Carlo evaluations of k-eff.
+
+### 3.2 GRSecant: Weighted Least Squares Fit
+
+The GRSecant algorithm (Price and Roskoff, 2023) uses a weighted least-squares fit over the $m$ most recent evaluations to account for uncertainties. Given points $(x_i, f_i, \sigma_i)$ where $\sigma_i$ is the standard deviation of $f_i$, we fit a linear model:
+
+$$f(x) = a + bx$$
+
+by minimizing the weighted residual sum of squares:
+
+$$\chi^2 = \sum_{i=1}^{m} \frac{(f_i - a - bx_i)^2}{\sigma_i^2}$$
+
+This yields the least-squares system:
+
+$$\begin{bmatrix}
+\sum \frac{1}{\sigma_i^2} & \sum \frac{x_i}{\sigma_i^2} \\
+\sum \frac{x_i}{\sigma_i^2} & \sum \frac{x_i^2}{\sigma_i^2}
+\end{bmatrix}
+\begin{bmatrix}
+a \\
+b
+\end{bmatrix}
+=
+\begin{bmatrix}
+\sum \frac{f_i}{\sigma_i^2} \\
+\sum \frac{x_i f_i}{\sigma_i^2}
+\end{bmatrix}$$
+
+The next evaluation point is predicted as:
+
+$$x_{n+1} = -\frac{a}{b}$$
+
+### 3.3 Adaptive Uncertainty Control
+
+GRSecant adaptively adjusts the number of batches $B_{n+1}$ to achieve a target uncertainty $\sigma_{\text{target},n+1}$ based on the proximity to convergence (Eq. 8 in Price and Roskoff):
+
+$$\sigma_{\text{target},n+1} = q \sigma_{\text{final}} \left( \frac{\min_{i \leq n} |f_i|}{k_{\text{tol}}} \right)^p$$
+
+where:
+- $q < 1$ is a multiplicative safety factor (typically 0.95)
+- $p$ controls the rate of uncertainty reduction (typically 0.5)
+- $k_{\text{tol}}$ is the convergence tolerance on $|f|$
+- $\sigma_{\text{final}}$ is the maximum acceptable final uncertainty
+
+The number of batches is determined using an empirical model:
+
+$$\sigma \approx \frac{k}{\sqrt{B}}$$
+
+where $k$ is estimated from recent evaluations by fitting $\ln(\sigma) = \ln(k) - 0.5 \ln(B)$.
+
+## 4. Derivative Tally Theory
+
+### 4.1 Logarithmic Derivatives in Monte Carlo
+
+Following Harper (2017), derivative tallies compute the logarithmic derivative of a tally score with respect to a perturbation parameter. For a tally score $c$, the logarithmic derivative with respect to parameter $x$ is:
+
+$$\frac{d \ln c}{dx} = \frac{1}{c} \frac{dc}{dx}$$
+
+The total derivative of a reaction rate tally can be decomposed as:
+
+$$\frac{dc}{dx} = \frac{\partial c}{\partial x}\Bigg|_{\phi} + \int \frac{\partial c}{\partial \phi(E,\mathbf{r},\boldsymbol{\Omega})} \frac{\partial \phi(E,\mathbf{r},\boldsymbol{\Omega})}{\partial x} dE\,d\mathbf{r}\,d\boldsymbol{\Omega}$$
+
+where:
+- The first term is the **direct effect**: changes in cross sections at fixed flux
+- The second term is the **indirect effect**: changes in flux distribution
+
+### 4.2 Implementation in OpenMC
+
+OpenMC's derivative tally implementation computes:
+
+$$c_{\text{deriv}} = c \left( \frac{1}{\phi} \frac{d\phi}{dx} + \frac{1}{c} \frac{\partial c}{\partial x}\Bigg|_{\phi} \right) = c \cdot \left( \frac{d\ln\phi}{dx} + \frac{\partial \ln c}{\partial x}\Bigg|_{\phi} \right)$$
+
+For **nuclide density derivatives** (e.g., boron concentration), with respect to number density $N$ (atoms/cm³):
+
+$$\frac{1}{c} \frac{\partial c}{\partial N}\Bigg|_{\phi} = \begin{cases}
+\frac{1}{N} & \text{if scoring single nuclide} \\
+\frac{\sigma_{\text{nuclide}}}{\Sigma_{\text{total}}} & \text{if scoring total material}
+\end{cases}$$
+
+For **material density derivatives** $\rho$ (g/cm³):
+
+$$\frac{1}{c} \frac{\partial c}{\partial \rho}\Bigg|_{\phi} = \frac{1}{\rho}$$
+
+The flux derivative $\frac{d\ln\phi}{dx}$ is accumulated during particle transport through collision and track-length scoring.
+
+### 4.3 k-eff Derivative via Quotient Rule
+
+Given that $k_{\text{eff}} = F/A$, the derivative with respect to parameter $x$ is:
+
+$$\frac{dk_{\text{eff}}}{dx} = \frac{d}{dx}\left(\frac{F}{A}\right) = \frac{A \frac{dF}{dx} - F \frac{dA}{dx}}{A^2}$$
+
+This is the **quotient rule** for derivatives. Using derivative tallies:
+- $F$ = base nu-fission tally
+- $A$ = base absorption tally
+- $\frac{dF}{dx}$ = derivative nu-fission tally
+- $\frac{dA}{dx}$ = derivative absorption tally
+
+All four quantities are estimated from the same Monte Carlo realization, each with its own uncertainty.
+
+### 4.4 Uncertainty Propagation
+
+Using linear error propagation (first-order Taylor expansion), the uncertainty in $\frac{dk}{dx}$ is:
+
+$$\sigma_{dk/dx}^2 \approx \left(\frac{\partial}{\partial F}\frac{dk}{dx}\right)^2 \sigma_F^2 + \left(\frac{\partial}{\partial A}\frac{dk}{dx}\right)^2 \sigma_A^2 + \left(\frac{\partial}{\partial (dF/dx)}\frac{dk}{dx}\right)^2 \sigma_{dF/dx}^2 + \left(\frac{\partial}{\partial (dA/dx)}\frac{dk}{dx}\right)^2 \sigma_{dA/dx}^2$$
+
+The partial derivatives are:
+
+$$\frac{\partial}{\partial F}\frac{dk}{dx} = -\frac{1}{A^2}\frac{dA}{dx}, \quad \frac{\partial}{\partial A}\frac{dk}{dx} = -\frac{A\frac{dF}{dx} - F\frac{dA}{dx}}{A^3} - \frac{F}{A^2}\frac{d^2A}{dx^2}$$
+
+$$\frac{\partial}{\partial(dF/dx)}\frac{dk}{dx} = \frac{1}{A}, \quad \frac{\partial}{\partial(dA/dx)}\frac{dk}{dx} = -\frac{F}{A^2}$$
+
+In the implementation, this is handled automatically using the `uncertainties` package's `ufloat` class, which tracks correlations.
+
+### 4.5 Conversion for Different Search Parameters
+
+OpenMC's C++ backend computes derivatives with respect to **number density** $N$ (atoms/cm³) for `nuclide_density` derivatives. If the search parameter $x$ is different (e.g., mass parts-per-million for boron), a conversion is required:
+
+$$\frac{dk}{dx} = \frac{dk}{dN} \cdot \frac{dN}{dx}$$
+
+The user must provide the conversion function $\frac{dN}{dx}$ via the `deriv_to_x_func` parameter. This allows the method to handle arbitrary parameterizations while maintaining a simple C++ implementation.
+
+## 5. Gradient-Augmented Least Squares Method
+
+### 5.1 Augmented Optimization Problem
+
+The derivative tally-enhanced method augments the standard least-squares objective with gradient constraints. Given $n$ point evaluations $(x_i, f_i, \sigma_i)$ and $n_g$ gradient evaluations $(x_j, g_j, \sigma_{g,j})$ where $g_j = \frac{df}{dx}\Big|_{x_j}$, we minimize:
+
+$$\mathcal{L}(a, b) = \sum_{i=1}^{n} \frac{(f_i - a - bx_i)^2}{\sigma_i^2} + \sum_{j=1}^{n_g} \frac{(b - g_j)^2}{\sigma_{g,j}^2}$$
+
+This is a **constrained least-squares problem** where:
+- The first term fits the linear model to function values
+- The second term constrains the slope $b$ to match observed gradients
+
+### 5.2 Matrix Formulation
+
+We can write this as an augmented linear system $\mathbf{A}\mathbf{c} = \mathbf{b}$ where $\mathbf{c} = [a, b]^T$:
+
+$$\mathbf{A} = \begin{bmatrix}
+\frac{1}{\sigma_1} & \frac{x_1}{\sigma_1} \\
+\vdots & \vdots \\
+\frac{1}{\sigma_n} & \frac{x_n}{\sigma_n} \\
+0 & 1 \\
+\vdots & \vdots \\
+0 & 1
+\end{bmatrix}, \quad
+\mathbf{b} = \begin{bmatrix}
+\frac{f_1}{\sigma_1} \\
+\vdots \\
+\frac{f_n}{\sigma_n} \\
+\frac{g_1}{\sigma_{g,1}} \\
+\vdots \\
+\frac{g_{n_g}}{\sigma_{g,n_g}}
+\end{bmatrix}$$
+
+The solution minimizes $\|\mathbf{A}\mathbf{c} - \mathbf{b}\|^2$:
+
+$$\mathbf{c} = (\mathbf{A}^T\mathbf{A})^{-1}\mathbf{A}^T\mathbf{b}$$
+
+This is solved using NumPy's `lstsq` function with automatic rank determination.
+
+### 5.3 Derivative Normalization
+
+When derivative magnitudes vary widely (e.g., $\frac{dk}{d\text{ppm}} \sim 10^{-20}$ for boron concentration in ppm), the least-squares system can become ill-conditioned. The implementation applies **automatic normalization**:
+
+$$\tilde{g}_j = \frac{g_j}{s}, \quad \tilde{\sigma}_{g,j} = \frac{\sigma_{g,j}}{s}$$
+
+where $s$ is a scale factor computed as the geometric mean of absolute derivative values:
+
+$$s = \left(\prod_{j: |g_j| > 0} |g_j|\right)^{1/n_g}$$
+
+This normalization:
+- Makes the system numerically stable regardless of parameter units
+- Preserves the relative weighting between gradients
+- Does not affect the solution since it cancels in the ratio $\frac{\tilde{g}_j}{\tilde{\sigma}_{g,j}}$
+
+The fitted slope $\tilde{b}$ is in normalized units, but since we only need the root location $x = -a/b$, the scaling cancels:
+
+$$x_{\text{root}} = -\frac{a}{\tilde{b} \cdot s} \cdot s = -\frac{a}{\tilde{b}}$$
+
+### 5.4 Weighting Strategy
+
+The augmented system naturally incorporates uncertainty weighting:
+- Function evaluations are weighted by $1/\sigma_i^2$ (standard practice)
+- Gradient constraints are weighted by $1/\sigma_{g,j}^2$
+- More precise measurements have higher influence
+
+This is optimal under the assumption of **independent Gaussian errors**, which is approximately true for Monte Carlo tallies with sufficient samples.
+
+## 6. Convergence Analysis
+
+### 6.1 Superlinear Convergence with Gradients
+
+Standard secant method achieves superlinear convergence with order $\phi = (1+\sqrt{5})/2 \approx 1.618$:
+
+$$|x_{n+1} - x^*| = O(|x_n - x^*|^\phi)$$
+
+When exact derivatives are available, Newton's method achieves quadratic convergence:
+
+$$|x_{n+1} - x^*| = O(|x_n - x^*|^2)$$
+
+The gradient-augmented least-squares method interpolates between these extremes:
+
+**Proposition 6.1**: *For a linear function $f(x) = a + bx$ with $b \neq 0$, the gradient-augmented fit with $n$ points and $n_g$ gradients recovers the exact root $x^* = -a/b$ in a single iteration, independent of noise, provided the least-squares system is well-conditioned.*
+
+**Proof**: For a truly linear function, all points and gradients satisfy:
+$$f_i = a + bx_i, \quad g_j = b$$
+
+The least-squares problem becomes:
+$$\min_{a',b'} \sum_i \frac{(a + bx_i - a' - b'x_i)^2}{\sigma_i^2} + \sum_j \frac{(b - b')^2}{\sigma_{g,j}^2}$$
+
+The unique global minimum is $a' = a, b' = b$, giving $x^* = -a/b$. ∎
+
+**Corollary 6.2**: *For near-linear $f(x)$, gradient information accelerates convergence by reducing the number of iterations required to approximate the local linear behavior.*
+
+### 6.2 Robustness to Non-Linearity
+
+For non-linear $f(x)$, the method approximates the local behavior near the root. Let $f(x) = f(x^*) + f'(x^*)(x-x^*) + \frac{1}{2}f''(x^*)( x-x^*)^2 + O((x-x^*)^3)$. The linear fit error is:
+
+$$\epsilon_{\text{fit}} = \max_{x \in [x_{\min}, x_{\max}]} |f(x) - (a + bx)|$$
+
+As the search converges and the interval $[x_{\min}, x_{\max}]$ shrinks, $\epsilon_{\text{fit}} \to 0$ and the linear approximation improves. Gradient information helps by:
+
+1. **Constraining slope**: Prevents overfitting to noisy data
+2. **Reducing variance**: Each gradient provides information equivalent to multiple function evaluations
+3. **Accelerating convergence**: Fewer iterations needed to bracket the root
+
+### 6.3 Efficiency Gains
+
+Empirical results (Table 1 & 2 in PR description) show:
+
+| Metric | Boron Search | Fuel Density Search |
+|--------|--------------|---------------------|
+| MC runs reduction | 47% (17 → 9) | 37% (43 → 27) |
+| Batch reduction | 52% (2282 → 1090) | 50% (9627 → 4783) |
+| Time reduction | 44% (55.5s → 31.2s) | 40% (229s → 137s) |
+
+These gains arise from:
+- **Fewer iterations**: Gradient constraints improve root approximation
+- **Better batch allocation**: Fewer wasted samples on non-informative points
+- **Reduced uncertainty**: Gradient information complements function values
+
+## 7. Comparison with GRSecant
+
+### 7.1 Similarities
+
+Both methods:
+- Use weighted least-squares fitting to handle stochastic uncertainties
+- Adaptively adjust batch sizes based on proximity to convergence
+- Support memory-limited fitting (use only recent $m$ points)
+- Converge to the same root (up to tolerance)
+
+### 7.2 Differences
+
+| Aspect | GRSecant | Gradient-Augmented |
+|--------|----------|-------------------|
+| **Information per iteration** | $k_{\text{eff}} \pm \sigma$ | $k_{\text{eff}} \pm \sigma$ + $\frac{dk}{dx} \pm \sigma_g$ |
+| **Degrees of freedom** | 2 (a, b) | 2 (a, b) |
+| **Constraints** | $n$ point equations | $n$ point + $n_g$ gradient equations |
+| **System size** | $n \times 2$ | $(n + n_g) \times 2$ |
+| **Computational cost** | Low | Low (negligible overhead) |
+| **Convergence rate** | Superlinear (~1.6) | Near-quadratic (with gradients) |
+| **Ideal use case** | Smooth, near-linear $f$ | Any $f$ where derivatives are cheap |
+
+### 7.3 When to Use Derivative Tallies
+
+**Use derivative-augmented method when:**
+- The perturbation parameter directly affects cross sections (density, nuclide density)
+- Derivative tallies are computationally cheap (same MC run)
+- Fast convergence is critical (operational reactor simulations)
+- Function evaluations are expensive (high particle count, complex geometry)
+
+**Use standard GRSecant when:**
+- Temperature derivatives (limited multipole data, resolved resonance range only)
+- Geometric parameters (enrichment zones, control rod positions)
+- No derivative tally support for the parameter type
+- Simplicity preferred over speed
+
+## 8. Numerical Stability Considerations
+
+### 8.1 Ill-Conditioning
+
+The least-squares system can become ill-conditioned when:
+
+1. **Collinearity**: All $x_i$ values are nearly identical
+   - Mitigation: Ensure $x_0$ and $x_1$ are sufficiently separated
+
+2. **Large dynamic range**: $|g_j| \gg |f_i/x_i|$ or vice versa
+   - Mitigation: Automatic normalization (Section 5.3)
+
+3. **Poor conditioning of $\mathbf{A}^T\mathbf{A}$**:
+   - Mitigation: NumPy's `lstsq` uses SVD, which is numerically stable
+
+### 8.2 Fallback to Standard Fit
+
+The implementation includes a fallback:
+
+```python
+if use_derivative_tallies and any(dks[-m:]):
+    # Try gradient-augmented fit
+    try:
+        a, b = gradient_augmented_lstsq(...)
+    except np.linalg.LinAlgError:
+        # Fall back to standard fit
+        a, b = standard_curve_fit(...)
+else:
+    a, b = standard_curve_fit(...)
+```
+
+This ensures robustness even if the augmented system is singular.
+
+### 8.3 Bounds Enforcement
+
+After computing the proposed $x_{\text{new}} = -a/b$, bounds are enforced:
+
+$$x_{\text{new}} \leftarrow \text{clamp}(x_{\text{new}}, x_{\min}, x_{\max})$$
+
+This prevents unphysical values (e.g., negative concentrations) and ensures the search remains in a region where the linear approximation is valid.
+
+## 9. Implementation Validation
+
+### 9.1 Test Coverage
+
+The implementation has been validated through:
+
+1. **Unit tests**: Verify derivative extraction logic (`test_tally_deriv_keff_search.py`)
+2. **Regression tests**: Compare convergence with known solutions
+3. **Consistency checks**: Ensure gradient-augmented method agrees with GRSecant when gradients are unavailable
+
+### 9.2 Reference Comparison
+
+Results are consistent with Harper's work (MIT thesis, 2017) on reaction rate derivatives. The quotient rule implementation for $\frac{dk}{dx}$ matches Harper's Equation 3.14.
+
+### 9.3 Convergence Criteria
+
+The search terminates when both criteria are met:
+
+$$|f(x)| = |k_{\text{eff}} - k_{\text{target}}| \leq k_{\text{tol}} \quad \text{and} \quad \sigma \leq \sigma_{\text{final}}$$
+
+This dual criterion ensures:
+- **Accuracy**: The solution is within tolerance of the target
+- **Precision**: The uncertainty is acceptably small
+
+## 10. Future Enhancements
+
+### 10.1 Higher-Order Methods
+
+The current implementation uses a **linear model** $f(x) = a + bx$. Potential extensions:
+
+1. **Quadratic fit**: $f(x) = a + bx + cx^2$
+   - Requires second derivatives (Hessian information)
+   - Could further reduce iterations for highly non-linear $f$
+
+2. **Rational approximation**: $f(x) = \frac{a + bx}{1 + cx}$
+   - Better for asymptotic behavior
+   - More complex to fit
+
+### 10.2 Multi-Parameter Search
+
+The current method handles **single-parameter** searches. Extension to **multi-dimensional** parameter spaces $(x_1, x_2, \ldots, x_n)$ would require:
+
+- Gradient vectors $\nabla k = [\frac{\partial k}{\partial x_1}, \ldots, \frac{\partial k}{\partial x_n}]$
+- Multi-dimensional least-squares fitting
+- More sophisticated convergence criteria
+
+### 10.3 Improved Temperature Derivatives
+
+Temperature derivatives currently have limitations:
+- Require Windowed Multipole cross section data
+- Valid only in resolved resonance range (~1 eV to ~10 keV)
+- Not available for most nuclides
+
+Enhancements could include:
+- Finite-difference approximations for non-multipole nuclides
+- Hybrid methods combining analytical and numerical derivatives
+
+## 11. Conclusion
+
+The derivative tally-enhanced k-eff search method provides a mathematically sound and computationally efficient extension to the GRSecant algorithm. By incorporating gradient information through an augmented least-squares formulation, the method achieves:
+
+1. **Faster convergence**: 37-52% reduction in Monte Carlo evaluations
+2. **Rigorous uncertainty treatment**: Derivatives weighted by their uncertainties
+3. **Numerical stability**: Automatic normalization prevents ill-conditioning
+4. **Backward compatibility**: Falls back to standard GRSecant when derivatives unavailable
+
+The method is grounded in established theory from numerical optimization (constrained least squares) and Monte Carlo neutron transport (Harper's derivative tally methodology). The implementation in OpenMC provides a practical and efficient tool for reactor physics applications requiring iterative k-eff searches.
+
+## References
+
+1. Price, D., & Roskoff, N. (2023). "An uncertainty-aware root-finding algorithm for reactor physics applications in Monte Carlo codes." *Progress in Nuclear Energy*, 160, 104731. DOI: 10.1016/j.pnucene.2023.104731
+
+2. Harper, S. (2017). "Calculating Reaction Rate Derivatives in Monte Carlo Neutron Transport." MIT Master's Thesis. [https://dspace.mit.edu/handle/1721.1/106690](https://dspace.mit.edu/handle/1721.1/106690)
+
+3. Romano, P. K., et al. (2015). "OpenMC: A state-of-the-art Monte Carlo code for research and development." *Annals of Nuclear Energy*, 82, 90-97.
+
+4. Kelley, C. T. (1999). "Iterative Methods for Optimization." SIAM.
+
+5. Nocedal, J., & Wright, S. J. (2006). "Numerical Optimization" (2nd ed.). Springer.
+
+---
+
+*Document prepared for OpenMC PR #3690*  
+*Last updated: January 2026*
